@@ -11,7 +11,7 @@ exec 2>&1
 
 echo "Starting Minikube setup at $(date)"
 
-# Variables from Terraform
+# Variables from Terraform - CORRECTED VARIABLE NAMES
 CLUSTER_NAME="${cluster_name}"
 ENVIRONMENT="${environment}"
 MINIKUBE_VERSION="${minikube_version}"
@@ -123,8 +123,8 @@ sysctl --system
 # Start Minikube as ubuntu user - FIXED VERSION
 echo "Starting Minikube cluster..."
 
-# Create a script to run as ubuntu user
-cat <<'MINIKUBE_SCRIPT' > /tmp/start_minikube.sh
+# Create a script to run as ubuntu user with variable substitution
+cat <<MINIKUBE_SCRIPT > /tmp/start_minikube.sh
 #!/bin/bash
 set -e
 
@@ -143,14 +143,14 @@ chown -R ubuntu:ubuntu /home/ubuntu/.kube
 
 # Start Minikube with better error handling
 echo "Starting Minikube with docker driver..."
-minikube start \
-    --driver=docker \
-    --memory=$MINIKUBE_MEMORY \
-    --cpus=$MINIKUBE_CPUS \
-    --kubernetes-version=$KUBERNETES_VERSION \
-    --delete-on-failure \
-    --force \
-    --wait=true \
+minikube start \\
+    --driver=docker \\
+    --memory=$MINIKUBE_MEMORY \\
+    --cpus=$MINIKUBE_CPUS \\
+    --kubernetes-version=$KUBERNETES_VERSION \\
+    --delete-on-failure \\
+    --force \\
+    --wait=true \\
     --wait-timeout=600s
 
 # Verify Minikube is running
@@ -188,9 +188,6 @@ sudo -i -u ubuntu bash -c "
     export HOME=/home/ubuntu
     export MINIKUBE_HOME=/home/ubuntu/.minikube
     export KUBECONFIG=/home/ubuntu/.kube/config
-    export MINIKUBE_MEMORY=$MINIKUBE_MEMORY
-    export MINIKUBE_CPUS=$MINIKUBE_CPUS
-    export KUBERNETES_VERSION=$KUBERNETES_VERSION
     /tmp/start_minikube.sh
 "
 
@@ -246,7 +243,7 @@ Minikube Configuration:
 - Version: $MINIKUBE_VERSION
 - Kubernetes Version: $KUBERNETES_VERSION
 - Driver: $MINIKUBE_DRIVER
-- Memory: ${minikube_memory}MB
+- Memory: ${MINIKUBE_MEMORY}MB
 - CPUs: $MINIKUBE_CPUS
 
 Access Information:
