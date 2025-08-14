@@ -5,6 +5,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -30,6 +38,19 @@ data "aws_ami" "ubuntu" {
     name   = "virtualization-type"
     values = ["hvm"]
   }
+}
+
+# Generate SSH key pair
+resource "tls_private_key" "minikube_key" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+# Save private key to local file
+resource "local_file" "minikube_private_key" {
+  content  = tls_private_key.minikube_key.private_key_pem
+  filename = "${path.module}/${var.cluster_name}-key.pem"
+  file_permission = "0600"
 }
 
 # VPC
@@ -189,9 +210,10 @@ resource "aws_iam_role" "minikube_role" {
     ]
   })
 
-  tags = {
-    Environment = var.environment
-  }
+  # Remove tags to avoid the TagRole permission issue
+  # tags = {
+  #   Environment = var.environment
+  # }
 }
 
 # IAM Policy for ECR access
@@ -232,27 +254,14 @@ resource "aws_iam_instance_profile" "minikube_profile" {
   role = aws_iam_role.minikube_role.name
 }
 
-# Key Pair
+# Key Pair using generated key
 resource "aws_key_pair" "minikube_key" {
   key_name   = "${var.cluster_name}-key"
-  public_key = var.public_key
+  public_key = tls_private_key.minikube_key.public_key_openssh
 
   tags = {
     Environment = var.environment
   }
-}
-
-# User Data Script
-locals {
-  user_data = base64encode(templatefile("${path.module}/minikube-setup.sh", {
-    cluster_name       = var.cluster_name
-    environment        = var.environment
-    minikube_version   = var.minikube_version
-    kubernetes_version = var.kubernetes_version
-    minikube_driver    = var.minikube_driver
-    minikube_memory    = var.minikube_memory
-    minikube_cpus      = var.minikube_cpus
-  }))
 }
 
 # EC2 Instance
@@ -264,7 +273,16 @@ resource "aws_instance" "minikube_instance" {
   subnet_id              = aws_subnet.minikube_subnet.id
   iam_instance_profile   = aws_iam_instance_profile.minikube_profile.name
 
-  user_data = local.user_data
+  # Basic user data for initial setup
+  user_data = base64encode(<<-EOF
+#!/bin/bash
+apt-get update
+apt-get install -y awscli
+
+# Create a marker that instance is ready for provisioning
+echo "Instance ready for provisioning" > /tmp/instance-ready
+EOF
+  )
 
   root_block_device {
     volume_type = "gp3"
@@ -280,6 +298,67 @@ resource "aws_instance" "minikube_instance" {
 
   lifecycle {
     create_before_destroy = true
+  }
+
+  # Wait for instance to be ready before running provisioners
+  provisioner "remote-exec" {
+    inline = [
+      "cloud-init status --wait",
+      "echo 'Instance is ready for Minikube setup'"
+    ]
+
+    connection {
+      type        = "ssh"
+      user        = "ubuntu"
+      private_key = tls_private_key.minikube_key.private_key_pem
+      host        = self.public_ip
+      timeout     = "5m"
+    }
+  }
+
+  # Copy the minikube setup script
+  provisioner "file" {
+    content = templatefile("${path.module}/minikube-setup.sh", {
+      cluster_name       = var.cluster_name
+      environment        = var.environment
+      minikube_version   = var.minikube_version
+      kubernetes_version = var.kubernetes_version
+      minikube_driver    = var.minikube_driver
+      minikube_memory    = var.minikube_memory
+      minikube_cpus      = var.minikube_cpus
+    })
+    destination = "/tmp/minikube-setup.sh"
+
+    connection {
+      type        = "ssh"
+      user        = "ubuntu"
+      private_key = tls_private_key.minikube_key.private_key_pem
+      host        = self.public_ip
+      timeout     = "5m"
+    }
+  }
+
+  # Execute the minikube setup script
+  provisioner "remote-exec" {
+    inline = [
+      "chmod +x /tmp/minikube-setup.sh",
+      "sudo /tmp/minikube-setup.sh 2>&1 | tee /tmp/minikube-setup.log",
+      # Wait for the success marker with extended timeout
+      "timeout 1200 bash -c 'until [ -f /tmp/minikube-ready ]; do echo \"Waiting for Minikube setup to complete...\"; sleep 30; done'",
+      "cat /tmp/minikube-ready",
+      "echo '✅ Minikube setup completed successfully'",
+      # Verify minikube is actually running
+      "sudo -u ubuntu minikube status",
+      "sudo -u ubuntu kubectl get nodes"
+    ]
+
+    connection {
+      type        = "ssh"
+      user        = "ubuntu"
+      private_key = tls_private_key.minikube_key.private_key_pem
+      host        = self.public_ip
+      timeout     = "25m"  # Extended timeout for minikube setup
+    }
   }
 }
 

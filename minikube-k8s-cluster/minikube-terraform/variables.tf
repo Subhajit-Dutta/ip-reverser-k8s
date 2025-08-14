@@ -43,10 +43,7 @@ variable "root_volume_size" {
   }
 }
 
-variable "public_key" {
-  description = "Public key for SSH access"
-  type        = string
-}
+# Removed public_key variable since we're auto-generating SSH keys
 
 variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to access the cluster"

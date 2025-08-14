@@ -18,6 +18,11 @@ output "ssh_command" {
   value       = "ssh -i ${var.cluster_name}-key.pem ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip}"
 }
 
+output "private_key_path" {
+  description = "Path to the generated private key"
+  value       = local_file.minikube_private_key.filename
+}
+
 output "minikube_ip" {
   description = "Minikube cluster IP (same as instance IP for this setup)"
   value       = var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip
@@ -28,14 +33,19 @@ output "kubernetes_dashboard_url" {
   value       = "http://${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip}:8080"
 }
 
+output "minikube_dashboard_command" {
+  description = "Command to access Minikube dashboard with port forwarding"
+  value       = "ssh -i ${var.cluster_name}-key.pem -L 8080:localhost:8080 ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip} 'minikube dashboard --url'"
+}
+
 output "minikube_status_command" {
   description = "Command to check Minikube status"
   value       = "ssh -i ${var.cluster_name}-key.pem ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip} 'minikube status'"
 }
 
 output "kubectl_config_command" {
-  description = "Command to get kubectl config"
-  value       = "ssh -i ${var.cluster_name}-key.pem ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip} 'cat ~/.kube/config'"
+  description = "Command to copy kubectl config"
+  value       = "scp -i ${var.cluster_name}-key.pem ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip}:~/.kube/config ./kubeconfig"
 }
 
 output "security_group_id" {
@@ -66,5 +76,6 @@ output "cluster_info" {
     kubernetes_version = var.kubernetes_version
     instance_type      = var.instance_type
     public_ip         = var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip
+    private_key_path  = local_file.minikube_private_key.filename
   }
 }

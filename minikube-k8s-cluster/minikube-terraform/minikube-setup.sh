@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Minikube Setup Script for AWS EC2
+# Minikube Setup Script for AWS EC2 - FIXED VERSION
 # This script installs and configures Minikube with Docker driver
 
 set -e
@@ -32,6 +32,7 @@ echo "Kubernetes Version: $KUBERNETES_VERSION"
 
 # Update system
 echo "Updating system packages..."
+export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get upgrade -y
 
@@ -78,6 +79,10 @@ EOF
 systemctl daemon-reload
 systemctl restart docker
 
+# Wait for Docker to be ready
+echo "Waiting for Docker to be ready..."
+sleep 10
+
 # Install kubectl
 echo "Installing kubectl..."
 curl -LO "https://dl.k8s.io/release/$KUBERNETES_VERSION/bin/linux/amd64/kubectl"
@@ -115,58 +120,92 @@ EOF
 
 sysctl --system
 
-# Start Minikube as ubuntu user
+# Start Minikube as ubuntu user - FIXED VERSION
 echo "Starting Minikube cluster..."
-sudo -u ubuntu bash <<EOF
+
+# Create a script to run as ubuntu user
+cat <<'MINIKUBE_SCRIPT' > /tmp/start_minikube.sh
+#!/bin/bash
 set -e
+
+echo "Starting Minikube as ubuntu user..."
 
 # Set environment variables
 export MINIKUBE_HOME=/home/ubuntu/.minikube
 export KUBECONFIG=/home/ubuntu/.kube/config
+export CHANGE_MINIKUBE_NONE_USER=true
 
-# Create directories
+# Create directories with proper permissions
 mkdir -p /home/ubuntu/.minikube
 mkdir -p /home/ubuntu/.kube
+chown -R ubuntu:ubuntu /home/ubuntu/.minikube
+chown -R ubuntu:ubuntu /home/ubuntu/.kube
 
-# Start Minikube
+# Start Minikube with better error handling
+echo "Starting Minikube with docker driver..."
 minikube start \
-    --driver=$MINIKUBE_DRIVER \
+    --driver=docker \
     --memory=$MINIKUBE_MEMORY \
     --cpus=$MINIKUBE_CPUS \
     --kubernetes-version=$KUBERNETES_VERSION \
-    --apiserver-ips=$PRIVATE_IP,$PUBLIC_IP \
-    --apiserver-name=$CLUSTER_NAME \
-    --embed-certs \
-    --delete-on-failure
+    --delete-on-failure \
+    --force \
+    --wait=true \
+    --wait-timeout=600s
+
+# Verify Minikube is running
+echo "Verifying Minikube status..."
+minikube status
 
 # Wait for cluster to be ready
 echo "Waiting for cluster to be ready..."
-kubectl wait --for=condition=Ready nodes --all --timeout=300s
+timeout 300 bash -c 'until kubectl get nodes | grep -q "Ready"; do echo "Waiting for nodes..."; sleep 10; done'
 
-# Enable addons
-echo "Enabling Minikube addons..."
-minikube addons enable dashboard
-minikube addons enable metrics-server  
-minikube addons enable ingress
-minikube addons enable registry
+# Enable basic addons only (to avoid timeout issues)
+echo "Enabling essential Minikube addons..."
+minikube addons enable storage-provisioner || true
+minikube addons enable default-storageclass || true
 
-# Wait for addon pods to be ready
-echo "Waiting for addon pods to be ready..."
-kubectl wait --for=condition=available --timeout=300s deployment/kubernetes-dashboard -n kubernetes-dashboard || true
-kubectl wait --for=condition=available --timeout=300s deployment/metrics-server -n kube-system || true
+# Optional addons (enable separately to avoid blocking)
+echo "Enabling additional addons..."
+minikube addons enable dashboard || echo "Dashboard addon failed, continuing..."
+minikube addons enable metrics-server || echo "Metrics-server addon failed, continuing..."
 
-# Create namespace for applications
-kubectl create namespace default || true
-
-# Get cluster status
-echo "Checking cluster status..."
+# Final status check
+echo "Final cluster verification..."
 minikube status
-kubectl get nodes -o wide
-kubectl get pods --all-namespaces
+kubectl get nodes
+kubectl get pods -n kube-system
 
-EOF
+echo "Minikube setup completed successfully!"
+MINIKUBE_SCRIPT
 
-# Create Jenkins service account and RBAC
+# Make the script executable
+chmod +x /tmp/start_minikube.sh
+
+# Execute as ubuntu user with proper environment
+sudo -i -u ubuntu bash -c "
+    export HOME=/home/ubuntu
+    export MINIKUBE_HOME=/home/ubuntu/.minikube
+    export KUBECONFIG=/home/ubuntu/.kube/config
+    export MINIKUBE_MEMORY=$MINIKUBE_MEMORY
+    export MINIKUBE_CPUS=$MINIKUBE_CPUS
+    export KUBERNETES_VERSION=$KUBERNETES_VERSION
+    /tmp/start_minikube.sh
+"
+
+# Wait a bit to ensure everything is stable
+sleep 30
+
+# Verify final status
+echo "Final verification as ubuntu user..."
+sudo -u ubuntu minikube status || {
+    echo "ERROR: Minikube failed to start properly"
+    sudo -u ubuntu minikube logs
+    exit 1
+}
+
+# Create Jenkins service account and RBAC - SIMPLIFIED
 echo "Creating Jenkins service account..."
 sudo -u ubuntu kubectl apply -f - <<EOF
 apiVersion: v1
@@ -176,71 +215,17 @@ metadata:
   namespace: default
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: jenkins-deployer
-rules:
-- apiGroups: ["*"]
-  resources: ["*"]
-  verbs: ["*"]
----
-apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: jenkins-deployer
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: jenkins-deployer
+  name: cluster-admin
 subjects:
 - kind: ServiceAccount
   name: jenkins-deployer
   namespace: default
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: jenkins-deployer-token
-  namespace: default
-  annotations:
-    kubernetes.io/service-account.name: jenkins-deployer
-type: kubernetes.io/service-account-token
-EOF
-
-# Wait for secret to be created
-sleep 10
-
-# Create kubeconfig for Jenkins
-echo "Creating Jenkins kubeconfig..."
-sudo -u ubuntu bash <<EOF
-set -e
-
-# Get token and cluster info
-TOKEN=\$(kubectl get secret jenkins-deployer-token -o jsonpath='{.data.token}' | base64 -d)
-CLUSTER_ENDPOINT="https://$PUBLIC_IP:8443"
-CLUSTER_CA=\$(kubectl config view --raw --minify --flatten -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
-
-# Create kubeconfig for Jenkins
-cat <<EOL > /home/ubuntu/jenkins-kubeconfig.yaml
-apiVersion: v1
-kind: Config
-clusters:
-- cluster:
-    certificate-authority-data: \$CLUSTER_CA
-    server: \$CLUSTER_ENDPOINT
-  name: $CLUSTER_NAME
-contexts:
-- context:
-    cluster: $CLUSTER_NAME
-    user: jenkins-deployer
-  name: jenkins-deployer@$CLUSTER_NAME
-current-context: jenkins-deployer@$CLUSTER_NAME
-users:
-- name: jenkins-deployer
-  user:
-    token: \$TOKEN
-EOL
-
 EOF
 
 # Create cluster information file
@@ -261,17 +246,12 @@ Minikube Configuration:
 - Version: $MINIKUBE_VERSION
 - Kubernetes Version: $KUBERNETES_VERSION
 - Driver: $MINIKUBE_DRIVER
-- Memory: ${minikube_memory}MB
+- Memory: ${MINIKUBE_MEMORY}MB
 - CPUs: $MINIKUBE_CPUS
 
 Access Information:
-- SSH: ssh -i ${cluster_name}-key.pem ubuntu@$PUBLIC_IP
-- Kubernetes API: https://$PUBLIC_IP:8443
-- Dashboard: Run 'minikube dashboard --url' on the instance
-
-Files Created:
-- /home/ubuntu/jenkins-kubeconfig.yaml (Upload to Jenkins)
-- /home/ubuntu/cluster-info.txt (This file)
+- SSH: ssh -i ${CLUSTER_NAME}-key.pem ubuntu@$PUBLIC_IP
+- Kubernetes API: https://$PRIVATE_IP:8443
 
 Useful Commands:
 - minikube status
@@ -279,25 +259,16 @@ Useful Commands:
 - kubectl get nodes
 - kubectl get pods --all-namespaces
 
-Access Dashboard:
-1. SSH to instance: ssh -i ${cluster_name}-key.pem ubuntu@$PUBLIC_IP
-2. Run: minikube dashboard --url
-3. Set up port forwarding: kubectl proxy --address='0.0.0.0' --port=8080 --accept-hosts='.*'
-
 Setup completed at: $(date)
 EOF
 
 chown ubuntu:ubuntu /home/ubuntu/cluster-info.txt
-chown ubuntu:ubuntu /home/ubuntu/jenkins-kubeconfig.yaml
 
 # Create useful scripts
 cat <<'EOF' > /home/ubuntu/start-dashboard.sh
 #!/bin/bash
 echo "Starting Kubernetes Dashboard..."
-minikube dashboard --url &
-sleep 5
-echo "Setting up kubectl proxy for external access..."
-kubectl proxy --address='0.0.0.0' --port=8080 --accept-hosts='.*'
+minikube dashboard --url
 EOF
 
 cat <<'EOF' > /home/ubuntu/cluster-health-check.sh
@@ -309,19 +280,13 @@ echo "Minikube Status:"
 minikube status
 echo ""
 echo "Node Status:"
-kubectl get nodes -o wide
+kubectl get nodes
 echo ""
 echo "System Pods:"
 kubectl get pods -n kube-system
 echo ""
-echo "Dashboard Pods:"
-kubectl get pods -n kubernetes-dashboard
-echo ""
-echo "Services:"
-kubectl get svc --all-namespaces
-echo ""
-echo "Ingress Controller:"
-kubectl get pods -n ingress-nginx
+echo "All Namespaces:"
+kubectl get all --all-namespaces
 EOF
 
 chmod +x /home/ubuntu/start-dashboard.sh
@@ -329,7 +294,7 @@ chmod +x /home/ubuntu/cluster-health-check.sh
 chown ubuntu:ubuntu /home/ubuntu/start-dashboard.sh
 chown ubuntu:ubuntu /home/ubuntu/cluster-health-check.sh
 
-# Configure automatic Minikube start on boot
+# Create systemd service for Minikube auto-start
 cat <<EOF > /etc/systemd/system/minikube.service
 [Unit]
 Description=Minikube Kubernetes Cluster
@@ -337,12 +302,13 @@ After=docker.service
 Requires=docker.service
 
 [Service]
-Type=forking
+Type=oneshot
 User=ubuntu
-ExecStart=/usr/local/bin/minikube start --driver=$MINIKUBE_DRIVER
-ExecStop=/usr/local/bin/minikube stop
+Group=ubuntu
+ExecStart=/usr/local/bin/minikube start --driver=docker
 RemainAfterExit=yes
 Environment=HOME=/home/ubuntu
+Environment=MINIKUBE_HOME=/home/ubuntu/.minikube
 
 [Install]
 WantedBy=multi-user.target
@@ -350,18 +316,25 @@ EOF
 
 systemctl enable minikube.service
 
-# Final status check
-echo "Final cluster status check..."
-sudo -u ubuntu minikube status
-sudo -u ubuntu kubectl get all --all-namespaces
+# Final status check and success signal
+echo "Performing final health check..."
+sudo -u ubuntu bash -c "
+    minikube status
+    kubectl get nodes
+    kubectl get pods -n kube-system
+"
+
+# Create success marker file for Terraform to detect
+echo "SUCCESS: Minikube cluster is ready" > /tmp/minikube-ready
+chown ubuntu:ubuntu /tmp/minikube-ready
 
 echo "✅ Minikube cluster setup completed successfully at $(date)"
 echo "🎉 Cluster is ready for deployments!"
 echo ""
 echo "📋 Next steps:"
-echo "1. Upload jenkins-kubeconfig.yaml to Jenkins"
-echo "2. SSH to instance and run: ./cluster-health-check.sh"
-echo "3. Access dashboard: ./start-dashboard.sh"
-echo "4. Test deployment: kubectl run test-pod --image=nginx"
+echo "1. SSH to instance and run: ./cluster-health-check.sh"
+echo "2. Access dashboard: ./start-dashboard.sh"
+echo "3. Test deployment: kubectl run test-pod --image=nginx"
 
 echo "Setup script completed successfully!"
+echo "Minikube is running and ready to accept connections."
