@@ -18,12 +18,12 @@ pipeline {
         booleanParam(
             name: 'DEPLOY_CLUSTER',
             defaultValue: false,
-            description: 'Deploy new Minikube cluster on AWS EC2'
+            description: '🚀 Deploy new Minikube cluster on AWS EC2'
         )
         booleanParam(
             name: 'DESTROY_CLUSTER',
             defaultValue: false,
-            description: 'Destroy existing Minikube cluster and infrastructure'
+            description: '🔥 Destroy existing Minikube cluster and infrastructure'
         )
         choice(
             name: 'INSTANCE_TYPE',
@@ -78,7 +78,7 @@ pipeline {
     }
     
     stages {
-        stage('Agent Info & IAM Verification') {
+        stage('🔐 Agent Info & IAM Verification') {
             steps {
                 script {
                     echo "🖥️ Agent Information:"
@@ -118,7 +118,7 @@ pipeline {
             }
         }
         
-        stage('Validation') {
+        stage('✅ Validation') {
             steps {
                 script {
                     echo "🔍 Validating pipeline parameters..."
@@ -153,14 +153,14 @@ pipeline {
             }
         }
         
-        stage('Checkout') {
+        stage('📥 Checkout') {
             steps {
                 echo '📥 Checking out source code...'
                 checkout scm
             }
         }
         
-        stage('Verify Dependencies') {
+        stage('🔧 Verify Dependencies') {
             steps {
                 echo '🔧 Verifying required tools on Amazon Linux agent...'
                 sh '''
@@ -304,7 +304,7 @@ pipeline {
             }
         }
         
-        stage('Prepare Infrastructure') {
+        stage('🏗️ Prepare Infrastructure') {
             when {
                 anyOf {
                     expression { params.DEPLOY_CLUSTER == true }
@@ -356,7 +356,7 @@ EOF
             }
         }
         
-        stage('Deploy Minikube Cluster') {
+        stage('🚀 Deploy Minikube Cluster') {
             when {
                 expression { params.DEPLOY_CLUSTER == true }
             }
@@ -441,7 +441,7 @@ EOF
             }
         }
         
-        stage('Wait for Cluster Readiness') {
+        stage('⏳ Wait for Cluster Readiness') {
             when {
                 expression { params.DEPLOY_CLUSTER == true }
             }
@@ -489,7 +489,7 @@ EOF
             }
         }
         
-        stage('Configure Jenkins Access') {
+        stage('🔧 Configure Jenkins Access') {
             when {
                 expression { params.DEPLOY_CLUSTER == true }
             }
@@ -512,8 +512,8 @@ EOF
                         echo "📊 Kubeconfig size: $(wc -l < jenkins-kubeconfig.yaml) lines"
                         
                         cat <<EOF > cluster-access-info.txt
-Minikube Cluster Access Information
-==================================
+🎉 Minikube Cluster Access Information
+====================================
 
 Cluster Name: ${CLUSTER_NAME}
 Public IP: $INSTANCE_IP
@@ -523,12 +523,20 @@ Kubeconfig Location: jenkins-kubeconfig.yaml
 Dashboard Command: minikube dashboard --url
 
 To access cluster:
-1. Upload jenkins-kubeconfig.yaml to Jenkins credentials
+1. Download jenkins-kubeconfig.yaml from Jenkins workspace
 2. SSH to instance for direct access
 3. Use kubectl with the provided config
 
 IAM Role Used: $(aws sts get-caller-identity --query Arn --output text)
 Setup completed at: $(date)
+
+Access Your Application:
+- NodePort URL: http://$INSTANCE_IP:30080
+- Dashboard URL: http://$INSTANCE_IP:8080 (after port-forward)
+
+Commands to try:
+kubectl --kubeconfig=jenkins-kubeconfig.yaml get nodes
+kubectl --kubeconfig=jenkins-kubeconfig.yaml get pods --all-namespaces
 EOF
                         
                         echo "📄 Cluster access information saved"
@@ -537,7 +545,7 @@ EOF
             }
         }
         
-        stage('Cluster Health Check') {
+        stage('🏥 Cluster Health Check') {
             when {
                 expression { params.DEPLOY_CLUSTER == true }
             }
@@ -594,7 +602,7 @@ EOF
             }
         }
         
-        stage('Destroy Cluster') {
+        stage('🔥 Destroy Cluster') {
             when {
                 expression { params.DESTROY_CLUSTER == true }
             }
@@ -737,92 +745,4 @@ EOF
 🔥 Use DESTROY_CLUSTER=true when done to avoid charges
 """
                         }
-                    } catch (Exception e) {
-                        echo """
-🎉 Minikube Cluster Deployment Successful!
-=========================================
-✅ Cluster deployed successfully using IAM role
-📄 Check workspace for cluster-access-info.txt
-🔐 Deployed securely without hardcoded credentials
-💰 Remember to destroy when done to avoid charges
-"""
-                    }
-                    
-                } else if (params.DESTROY_CLUSTER) {
-                    echo """
-🔥 Minikube Cluster Destruction Successful!
-==========================================
-✅ All AWS resources have been destroyed
-💰 No ongoing charges
-🧹 Infrastructure cleanup completed
-
-✨ Summary:
-• EC2 instance terminated
-• VPC and networking components removed
-• Security groups deleted
-• Elastic IP released
-• All associated resources cleaned up
-
-🔐 Security:
-• Destruction performed using IAM role
-• No credentials exposed or stored
-• Secure cleanup process
-
-🖥️ Agent: ${env.NODE_NAME} ready for next deployment!
-💡 Tools remain installed for future builds
-"""
-                }
-            }
-        }
-        
-        failure {
-            echo """
-❌ Pipeline Failed on Agent: ${env.NODE_NAME}
-============================================
-
-🔍 Common Issues and Solutions:
-
-IAM Role Issues:
-• Verify IAM role is attached to Jenkins agent EC2 instance
-• Check role has required permissions (EC2, VPC, IAM)
-• Test: aws sts get-caller-identity
-• Ensure role can pass roles to other EC2 instances
-
-Infrastructure Issues:
-• Verify selected region has capacity for instance type
-• Check if VPC limits have been reached
-• Ensure Terraform state is not locked
-
-Agent-Specific Issues:
-• Verify tools are installed: terraform, aws, kubectl
-• Check agent has sufficient disk space
-• Verify agent can reach AWS APIs
-
-Amazon Linux Specific:
-• Check if dnf/yum packages are up to date
-• Verify Docker is running: sudo systemctl status docker
-• Check file permissions in home directory
-
-Network Issues:
-• Check VPC and subnet configuration
-• Verify internet gateway is attached
-• Ensure route tables are configured correctly
-
-Next Steps:
-1. Check console output for specific error messages
-2. Verify IAM role permissions and attachment
-3. Test AWS CLI: aws ec2 describe-instances --region us-west-2
-4. Check available space: df -h
-
-💡 For quick cleanup: Run with DESTROY_CLUSTER=true
-🔧 Agent troubleshooting: Check workspace directory
-🔐 IAM troubleshooting: Verify role attachment and permissions
-"""
-        }
-        
-        unstable {
-            echo "⚠️ Pipeline completed with warnings on agent: ${env.NODE_NAME}"
-            echo "Check logs for details and verify agent configuration."
-        }
-    }
-}
+                    } catch
