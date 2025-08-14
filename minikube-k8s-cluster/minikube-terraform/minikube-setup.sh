@@ -193,29 +193,28 @@ DOCKERTEST
     AVAILABLE_MEM=\$(free -m | grep Mem | awk '{print \$7}')
     CPU_CORES=\$(nproc)
     
-    MINIKUBE_MEM=\$((\\TOTAL_MEM - 1024))
-    echo "Available Memory: \${AVAILABLE_MEM}MB" 
-    echo "CPU Cores: \${CPU_CORES}"
-    echo "Requested Memory: ${minikube_memory}MB"
-    echo "Requested CPUs: ${minikube_cpus}"
+    echo \"Available Memory: \${AVAILABLE_MEM}MB\" 
+    echo \"CPU Cores: \${CPU_CORES}\"
+    echo \"Requested Memory: ${minikube_memory}MB\"
+    echo \"Requested CPUs: ${minikube_cpus}\"
     
     # Adjust memory if requested is too high
     MINIKUBE_MEM=${minikube_memory}
     if [ \$TOTAL_MEM -lt ${minikube_memory} ]; then
         MINIKUBE_MEM=\$((TOTAL_MEM - 512))
-        echo "⚠️  Adjusting memory to \${MINIKUBE_MEM}MB (system has \${TOTAL_MEM}MB total)"
+        echo \"⚠️  Adjusting memory to \${MINIKUBE_MEM}MB (system has \${TOTAL_MEM}MB total)\"
     fi
     
     # Adjust CPUs if requested is too high  
     MINIKUBE_CPUS=${minikube_cpus}
     if [ \$CPU_CORES -lt ${minikube_cpus} ]; then
         MINIKUBE_CPUS=\$CPU_CORES
-        echo "⚠️  Adjusting CPUs to \${MINIKUBE_CPUS} (system has \${CPU_CORES} cores)"
+        echo \"⚠️  Adjusting CPUs to \${MINIKUBE_CPUS} (system has \${CPU_CORES} cores)\"
     fi
     
     # Start Minikube with configuration - using adjusted values
     echo 'Starting Minikube with docker driver...'
-    echo "Command: minikube start --driver=${minikube_driver} --memory=\${MINIKUBE_MEM} --cpus=\${MINIKUBE_CPUS} --kubernetes-version=${kubernetes_version}"
+    echo \"Command: minikube start --driver=${minikube_driver} --memory=\${MINIKUBE_MEM} --cpus=\${MINIKUBE_CPUS} --kubernetes-version=${kubernetes_version}\"
     
     if minikube start \
         --driver=${minikube_driver} \

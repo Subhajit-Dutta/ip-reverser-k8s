@@ -318,27 +318,27 @@ EOF
     }
   }
 
-  # Copy the minikube setup script
-  provisioner "file" {
-    content = templatefile("${path.module}/minikube-setup.sh", {
-      cluster_name       = var.cluster_name
-      environment        = var.environment
-      minikube_version   = var.minikube_version
-      kubernetes_version = var.kubernetes_version
-      minikube_driver    = var.minikube_driver
-      minikube_memory    = var.minikube_memory
-      minikube_cpus      = var.minikube_cpus
-    })
-    destination = "/tmp/minikube-setup.sh"
+	# Copy the minikube setup script
+	provisioner "file" {
+	  content = templatefile("${path.module}/minikube-setup.sh", {
+		cluster_name       = var.cluster_name
+		environment        = var.environment
+		minikube_version   = var.minikube_version
+		kubernetes_version = var.kubernetes_version
+		minikube_driver    = var.minikube_driver
+		minikube_memory    = var.minikube_memory
+		minikube_cpus      = var.minikube_cpus
+	  })
+	  destination = "/tmp/minikube-setup.sh"
 
-    connection {
-      type        = "ssh"
-      user        = "ubuntu"
-      private_key = tls_private_key.minikube_key.private_key_pem
-      host        = self.public_ip
-      timeout     = "5m"
-    }
-  }
+	  connection {
+		type        = "ssh"
+		user        = "ubuntu"
+		private_key = tls_private_key.minikube_key.private_key_pem
+		host        = self.public_ip
+		timeout     = "5m"
+	  }
+	}
 
   # Execute the minikube setup script
   provisioner "remote-exec" {
