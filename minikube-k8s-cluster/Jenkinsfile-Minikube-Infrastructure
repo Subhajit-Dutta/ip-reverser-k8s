@@ -78,7 +78,7 @@ pipeline {
     }
     
     stages {
-        stage('🔐 Agent Info & IAM Verification') {
+        stage('🔍 Agent Info & IAM Verification') {
             steps {
                 script {
                     echo "🖥️ Agent Information:"
@@ -92,7 +92,7 @@ pipeline {
                         echo "Working Directory: $(pwd)"
                         echo "Available Space: $(df -h . | tail -1 | awk '{print $4}')"
                         echo ""
-                        echo "🔐 IAM Role Verification:"
+                        echo "🔍 IAM Role Verification:"
                         echo "========================"
                         
                         if aws sts get-caller-identity; then
@@ -304,7 +304,7 @@ pipeline {
             }
         }
         
-        stage('🏗️ Prepare Infrastructure') {
+        stage('🗃️ Prepare Infrastructure') {
             when {
                 anyOf {
                     expression { params.DEPLOY_CLUSTER == true }
@@ -312,7 +312,7 @@ pipeline {
                 }
             }
             steps {
-                echo '🏗️ Preparing infrastructure configuration...'
+                echo '🗃️ Preparing infrastructure configuration...'
                 dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
                         if [ ! -f ${HOME}/.ssh/id_rsa ]; then
@@ -364,7 +364,7 @@ EOF
                 echo '🚀 Deploying Minikube cluster using IAM role...'
                 dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
-                        echo "🔄 Initializing Terraform..."
+                        echo "📄 Initializing Terraform..."
                         terraform init
                         
                         echo "📋 Planning deployment..."
@@ -460,7 +460,7 @@ EOF
                         timeout 900 bash -c "
                             while true; do
                                 if ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@$INSTANCE_IP 'minikube status' 2>/dev/null | grep -q 'Running'; then
-                                    echo '✅ Minikube is running'
+                                    echo 'âœ… Minikube is running'
                                     break
                                 fi
                                 echo 'Still waiting for Minikube...'
@@ -545,18 +545,18 @@ EOF
             }
         }
         
-        stage('🏥 Cluster Health Check') {
+        stage('🔥 Cluster Health Check') {
             when {
                 expression { params.DEPLOY_CLUSTER == true }
             }
             steps {
-                echo '🏥 Performing cluster health check...'
+                echo '🔥 Performing cluster health check...'
                 dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
                         INSTANCE_IP=$(terraform output -raw instance_public_ip)
                         
                         ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "
-                            echo '🏥 Comprehensive Cluster Health Check'
+                            echo '🔥 Comprehensive Cluster Health Check'
                             echo '====================================='
                             echo ''
                             
@@ -584,7 +584,7 @@ EOF
                             kubectl get storageclass
                             echo ''
                             
-                            echo '🔒 RBAC Check:'
+                            echo '🔑 RBAC Check:'
                             kubectl get clusterrolebinding jenkins-deployer || echo 'Jenkins RBAC not found'
                             echo ''
                             
@@ -610,7 +610,7 @@ EOF
                 echo '🔥 Destroying Minikube cluster and infrastructure using IAM role...'
                 dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
-                        echo "🔄 Initializing Terraform..."
+                        echo "📄 Initializing Terraform..."
                         terraform init
                         
                         echo "📋 Planning destruction..."
@@ -721,7 +721,7 @@ EOF
 • SSH: ${outputs.ssh_command.value}
 • Kubeconfig: jenkins-kubeconfig.yaml (in workspace)
 
-🔐 Security:
+🔍 Security:
 • IAM Role: Used for secure deployment
 • No hardcoded credentials
 • Follows AWS security best practices
@@ -743,10 +743,66 @@ EOF
 
 💰 Remember: This cluster costs approximately 0.04 USD per hour
 🔥 Use DESTROY_CLUSTER=true when done to avoid charges
-"""  
-                    
-           } catch (Exception e) {
-    // proper exception handling
+"""
+                        }
+                    } catch (Exception e) {
+                        echo "⚠️ Could not read terraform outputs, but deployment completed successfully"
+                    }
+                } else if (params.DESTROY_CLUSTER) {
+                    echo """
+🔥 Minikube Cluster Destruction Completed!
+========================================
+
+✅ All AWS resources have been successfully destroyed
+💰 No further charges will be incurred
+🧹 Workspace has been cleaned up
+
+📊 Summary:
+• Cluster Name: ${params.CLUSTER_NAME}
+• Region: ${params.AWS_REGION}
+• Destruction completed at: ${new Date()}
+
+🔍 Security:
+• Used IAM role for secure destruction
+• No credentials exposed
+• Followed AWS security best practices
+"""
+                }
+            }
+        }
+        
+        failure {
+            echo """
+❌ Pipeline Failed!
+==================
+
+Please check the console output above for specific error details.
+
+Common issues and solutions:
+• IAM permissions: Ensure the EC2 instance has proper IAM role
+• Resource limits: Check AWS service quotas in your region
+• Network connectivity: Verify security groups and VPC settings
+• Terraform state: Check for state file conflicts
+
+For support, review the logs and error messages above.
+"""
+        }
+        
+        aborted {
+            echo """
+⏹️ Pipeline Aborted!
+===================
+
+The pipeline was manually stopped or timed out.
+
+If this was during deployment:
+• Check AWS console for any partially created resources
+• Consider running DESTROY_CLUSTER=true to clean up
+
+If this was during destruction:
+• Manually verify all resources are cleaned up in AWS console
+• Check for any remaining EC2 instances, VPCs, or security groups
+"""
+        }
+    }
 }
-       
-                       
