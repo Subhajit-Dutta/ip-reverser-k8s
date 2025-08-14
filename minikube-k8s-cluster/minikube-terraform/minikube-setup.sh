@@ -54,10 +54,44 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] 
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io
 
-# Configure Docker
+# Configure Docker and fix group membership immediately
 systemctl enable docker
 systemctl start docker
+
+# Add ubuntu user to docker group
 usermod -aG docker ubuntu
+
+# Wait for Docker to be fully ready
+echo "Waiting for Docker daemon to be fully ready..."
+sleep 10
+
+# Fix Docker socket permissions immediately (critical for Terraform execution)
+chmod 666 /var/run/docker.sock
+chown root:docker /var/run/docker.sock
+
+# Verify Docker daemon is running and accessible
+if ! systemctl is-active docker >/dev/null; then
+    echo "ERROR: Docker service is not running"
+    systemctl status docker
+    exit 1
+fi
+
+# Test Docker access as ubuntu user
+if sudo -u ubuntu docker version >/dev/null 2>&1; then
+    echo "✅ Docker access verified for ubuntu user"
+else
+    echo "❌ Docker access failed for ubuntu user - forcing fix"
+    # Force fix docker access
+    chmod 777 /var/run/docker.sock
+    if sudo -u ubuntu docker version >/dev/null 2>&1; then
+        echo "✅ Docker access fixed"
+    else
+        echo "❌ Docker access still failing"
+        exit 1
+    fi
+fi
+
+echo "Docker configuration completed successfully"
 
 # Configure Docker daemon for Minikube
 mkdir -p /etc/docker
@@ -125,6 +159,9 @@ sudo -i -u ubuntu bash -c "
     set -e
     
     echo 'Starting Minikube as ubuntu user...'
+    echo 'Current user: \$(whoami)'
+    echo 'Home directory: \$HOME'
+    echo 'Docker groups: \$(groups)'
     
     # Set environment variables
     export MINIKUBE_HOME=/home/ubuntu/.minikube
@@ -137,17 +174,67 @@ sudo -i -u ubuntu bash -c "
     chown -R ubuntu:ubuntu /home/ubuntu/.minikube
     chown -R ubuntu:ubuntu /home/ubuntu/.kube
     
-    # Start Minikube with configuration - using Terraform variables directly
+    # Check Docker access
+    echo 'Testing Docker access...'
+    if docker ps >/dev/null 2>&1; then
+        echo '✅ Docker access confirmed'
+    else
+        echo '❌ Docker access failed'
+        echo 'Docker groups: \$(groups | grep docker)'
+        echo 'Retrying with newgrp docker...'
+        newgrp docker <<DOCKERTEST
+docker ps
+DOCKERTEST
+    fi
+    
+    # Check system resources and adjust if needed
+    echo 'Checking system resources:'
+    TOTAL_MEM=\$(free -m | grep Mem | awk '{print \$2}')
+    AVAILABLE_MEM=\$(free -m | grep Mem | awk '{print \$7}')
+    CPU_CORES=\$(nproc)
+    
+    echo "Total Memory: \${TOTAL_MEM}MB"
+    echo "Available Memory: \${AVAILABLE_MEM}MB" 
+    echo "CPU Cores: \${CPU_CORES}"
+    echo "Requested Memory: ${minikube_memory}MB"
+    echo "Requested CPUs: ${minikube_cpus}"
+    
+    # Adjust memory if requested is too high
+    MINIKUBE_MEM=${minikube_memory}
+    if [ \$TOTAL_MEM -lt ${minikube_memory} ]; then
+        MINIKUBE_MEM=\$((TOTAL_MEM - 512))
+        echo "⚠️  Adjusting memory to \${MINIKUBE_MEM}MB (system has \${TOTAL_MEM}MB total)"
+    fi
+    
+    # Adjust CPUs if requested is too high  
+    MINIKUBE_CPUS=${minikube_cpus}
+    if [ \$CPU_CORES -lt ${minikube_cpus} ]; then
+        MINIKUBE_CPUS=\$CPU_CORES
+        echo "⚠️  Adjusting CPUs to \${MINIKUBE_CPUS} (system has \${CPU_CORES} cores)"
+    fi
+    
+    # Start Minikube with configuration - using adjusted values
     echo 'Starting Minikube with docker driver...'
-    minikube start \
+    echo "Command: minikube start --driver=${minikube_driver} --memory=\${MINIKUBE_MEM} --cpus=\${MINIKUBE_CPUS} --kubernetes-version=${kubernetes_version}"
+    
+    if minikube start \
         --driver=${minikube_driver} \
-        --memory=${minikube_memory} \
-        --cpus=${minikube_cpus} \
+        --memory=\$MINIKUBE_MEM \
+        --cpus=\$MINIKUBE_CPUS \
         --kubernetes-version=${kubernetes_version} \
         --delete-on-failure \
         --force \
         --wait=true \
-        --wait-timeout=600s
+        --wait-timeout=600s \
+        --v=3; then
+        echo '✅ Minikube started successfully'
+    else
+        echo '❌ Minikube start failed'
+        echo 'Checking logs...'
+        cat /home/ubuntu/.minikube/logs/lastStart.txt 2>/dev/null || echo 'No start log found'
+        minikube logs 2>/dev/null || echo 'No minikube logs available'
+        exit 1
+    fi
     
     # Verify Minikube is running
     echo 'Verifying Minikube status...'
