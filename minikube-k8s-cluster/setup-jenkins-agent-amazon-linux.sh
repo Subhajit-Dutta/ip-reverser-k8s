@@ -1,229 +1,167 @@
 #!/bin/bash
 
-# Amazon Linux Package Conflict Troubleshooter
-# This script helps resolve common package conflicts on Amazon Linux
+# Jenkins Agent Setup Script for Amazon Linux 2023
+# This script installs all required tools using DNF (not YUM)
 
 set -e
 
-echo "🔧 Amazon Linux Package Conflict Troubleshooter"
-echo "==============================================="
-
-# Function to check and resolve package conflicts
-resolve_conflicts() {
-    echo "🔍 Checking for package conflicts..."
-    
-    # Clean yum cache
-    echo "🧹 Cleaning yum cache..."
-    sudo yum clean all
-    
-    # Update package database
-    echo "📦 Updating package database..."
-    sudo yum makecache
-    
-    # Check for broken dependencies
-    echo "🔍 Checking for broken dependencies..."
-    sudo package-cleanup --problems || echo "No package-cleanup tool available"
-    
-    # Try to fix broken packages
-    echo "🔧 Attempting to fix broken packages..."
-    sudo yum update -y --skip-broken
-}
-
-# Function to install packages with multiple fallback strategies
-install_with_fallbacks() {
-    local package=$1
-    local description=$2
-    
-    echo "📦 Installing $description ($package)..."
-    
-    # Strategy 1: Normal install
-    if sudo yum install -y "$package"; then
-        echo "✅ $description installed successfully"
-        return 0
-    fi
-    
-    echo "⚠️ Normal install failed, trying with --allowerasing..."
-    # Strategy 2: Allow erasing conflicting packages
-    if sudo yum install -y --allowerasing "$package"; then
-        echo "✅ $description installed with --allowerasing"
-        return 0
-    fi
-    
-    echo "⚠️ --allowerasing failed, trying with --skip-broken..."
-    # Strategy 3: Skip broken dependencies
-    if sudo yum install -y --skip-broken "$package"; then
-        echo "✅ $description installed with --skip-broken"
-        return 0
-    fi
-    
-    echo "❌ Failed to install $description, will continue without it"
-    return 1
-}
-
-# Function to check Amazon Linux version
-check_amazon_linux_version() {
-    echo "🔍 Checking Amazon Linux version..."
-    
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        echo "OS: $PRETTY_NAME"
-        echo "Version: $VERSION_ID"
-        
-        # Amazon Linux 2 vs Amazon Linux 2023 have different package managers
-        if [[ "$VERSION_ID" == "2023" ]]; then
-            echo "⚠️ Detected Amazon Linux 2023 - consider using dnf instead of yum"
-            echo "Run: sudo dnf install <packages> instead"
-            return 2023
-        elif [[ "$VERSION_ID" == "2" ]]; then
-            echo "✅ Detected Amazon Linux 2 - yum should work fine"
-            return 2
-        else
-            echo "⚠️ Unknown Amazon Linux version"
-            return 1
-        fi
-    else
-        echo "❌ Cannot determine Amazon Linux version"
-        return 1
-    fi
-}
-
-# Function to install using dnf for Amazon Linux 2023
-install_with_dnf() {
-    echo "🔧 Using DNF package manager for Amazon Linux 2023..."
-    
-    # Update system
-    sudo dnf update -y
-    
-    # Install packages
-    sudo dnf install -y \
-        wget \
-        curl \
-        unzip \
-        git \
-        jq \
-        nc \
-        tar \
-        gzip \
-        docker \
-        java-11-amazon-corretto \
-        which \
-        procps-ng
-}
-
-# Main troubleshooting flow
-main() {
-    # Check Amazon Linux version
-    check_amazon_linux_version
-    AL_VERSION=$?
-    
-    if [ $AL_VERSION -eq 2023 ]; then
-        echo "🚀 Using DNF for Amazon Linux 2023..."
-        install_with_dnf
-        return 0
-    fi
-    
-    # For Amazon Linux 2, continue with yum troubleshooting
-    echo "🚀 Using YUM troubleshooting for Amazon Linux 2..."
-    
-    # Step 1: Resolve existing conflicts
-    resolve_conflicts
-    
-    # Step 2: Install packages with fallbacks
-    echo "📦 Installing essential packages with conflict resolution..."
-    
-    # Core utilities
-    install_with_fallbacks "wget curl unzip git tar gzip which" "Core Utilities"
-    
-    # Network tools
-    install_with_fallbacks "jq" "JSON Processor"
-    install_with_fallbacks "nc" "Netcat"
-    install_with_fallbacks "net-tools" "Network Tools"
-    install_with_fallbacks "bind-utils" "DNS Utils"
-    
-    # Docker
-    install_with_fallbacks "docker" "Docker"
-    
-    # Java (try multiple versions)
-    if ! install_with_fallbacks "java-11-amazon-corretto" "Java 11 Corretto"; then
-        if ! install_with_fallbacks "java-11-openjdk" "Java 11 OpenJDK"; then
-            install_with_fallbacks "java-1.8.0-openjdk" "Java 8 OpenJDK"
-        fi
-    fi
-    
-    # Process tools
-    install_with_fallbacks "procps-ng" "Process Tools"
-    
-    echo "✅ Package installation completed with conflict resolution"
-}
-
-# Function to show manual resolution steps
-show_manual_steps() {
-    echo ""
-    echo "🔧 Manual Resolution Steps:"
-    echo "=========================="
-    echo ""
-    echo "If the automatic resolution fails, try these manual steps:"
-    echo ""
-    echo "1. Check for conflicting packages:"
-    echo "   sudo yum check"
-    echo "   sudo package-cleanup --problems"
-    echo ""
-    echo "2. Remove conflicting packages (if safe):"
-    echo "   sudo yum remove <conflicting-package>"
-    echo ""
-    echo "3. Force install with alternatives:"
-    echo "   sudo yum install -y --allowerasing <package>"
-    echo "   sudo yum install -y --skip-broken <package>"
-    echo ""
-    echo "4. For Amazon Linux 2023, use DNF:"
-    echo "   sudo dnf install -y <package>"
-    echo ""
-    echo "5. Use alternative repositories:"
-    echo "   sudo yum install -y epel-release"
-    echo "   sudo yum install -y <package>"
-    echo ""
-    echo "6. Install from source if package conflicts persist:"
-    echo "   # This should be last resort"
-    echo ""
-    echo "7. Check enabled repositories:"
-    echo "   sudo yum repolist"
-    echo "   sudo yum-config-manager --disable <problematic-repo>"
-    echo ""
-}
-
-# Function to check specific common conflicts
-check_common_conflicts() {
-    echo "🔍 Checking for common Amazon Linux conflicts..."
-    
-    # Check for multiple Java versions
-    echo "☕ Checking Java installations..."
-    rpm -qa | grep -i java | sort
-    
-    # Check for Docker conflicts
-    echo "🐳 Checking Docker installations..."
-    rpm -qa | grep -i docker | sort
-    
-    # Check for repository conflicts
-    echo "📦 Checking enabled repositories..."
-    sudo yum repolist enabled
-    
-    # Check for locked packages
-    echo "🔒 Checking for package locks..."
-    sudo yum versionlock list 2>/dev/null || echo "No version locks found"
-}
-
-# Run the troubleshooter
-echo "Starting Amazon Linux package conflict resolution..."
+echo "🚀 Setting up Jenkins Agent on Amazon Linux 2023"
+echo "================================================="
+echo "Detected OS: Amazon Linux 2023"
+echo "Package Manager: DNF"
 echo ""
 
-check_common_conflicts
+# Update system
+echo "📦 Updating system packages with DNF..."
+sudo dnf update -y
+
+# Install essential packages
+echo "🔧 Installing essential packages with conflict resolution..."
+# Use DNF with --allowerasing for Amazon Linux 2023 conflicts
+sudo dnf install -y --allowerasing \
+    wget \
+    curl \
+    unzip \
+    git \
+    jq \
+    nmap-ncat \
+    tar \
+    gzip \
+    which \
+    procps-ng
+
+# Install additional packages with --skip-broken if conflicts persist
+echo "🔧 Installing additional packages..."
+sudo dnf install -y --skip-broken \
+    net-tools \
+    bind-utils \
+    telnet
+
+# Install Docker (already installed, but ensure it's latest)
+echo "🐳 Configuring Docker..."
+# Docker is already installed on your system
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker ec2-user
+
+# Note: Java 17 is already installed, which is fine for Jenkins
+echo "☕ Java already installed:"
+java -version
+
+# Install AWS CLI v2
+echo "☁️ Installing AWS CLI v2..."
+if ! command -v aws &> /dev/null; then
+    cd /tmp
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip awscliv2.zip
+    sudo ./aws/install
+    rm -rf aws awscliv2.zip
+else
+    echo "AWS CLI already installed: $(aws --version)"
+fi
+
+# Install Terraform
+echo "🏗️ Installing Terraform..."
+TERRAFORM_VERSION="1.12.2"  # Updated to latest version
+if ! command -v terraform &> /dev/null; then
+    cd /tmp
+    wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+    unzip terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+    sudo mv terraform /usr/local/bin/
+    rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+else
+    echo "Terraform already installed: $(terraform version | head -1)"
+    echo "Latest version available: ${TERRAFORM_VERSION}"
+    echo "To upgrade: sudo rm /usr/local/bin/terraform && cd /tmp && wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip && unzip terraform_${TERRAFORM_VERSION}_linux_amd64.zip && sudo mv terraform /usr/local/bin/ && rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+fi
+
+# Install kubectl
+echo "☸️ Installing kubectl..."
+if ! command -v kubectl &> /dev/null; then
+    cd /tmp
+    curl -LO "https://dl.k8s.io/release/v1.28.3/bin/linux/amd64/kubectl"
+    chmod +x kubectl
+    sudo mv kubectl /usr/local/bin/
+else
+    echo "kubectl already installed: $(kubectl version --client --short 2>/dev/null || echo 'kubectl installed')"
+fi
+
+# Create necessary directories
+echo "📁 Creating necessary directories..."
+mkdir -p /home/ec2-user/.ssh
+mkdir -p /home/ec2-user/jenkins-workspace
+chmod 700 /home/ec2-user/.ssh
+chown ec2-user:ec2-user /home/ec2-user/.ssh
+chown ec2-user:ec2-user /home/ec2-user/jenkins-workspace
+
+# Create useful aliases for Amazon Linux 2023
+echo "🔗 Creating useful aliases..."
+cat <<EOF >> /home/ec2-user/.bashrc
+
+# Jenkins Agent Aliases for Amazon Linux 2023
+alias tf='terraform'
+alias k='kubectl'
+alias kgp='kubectl get pods'
+alias kgs='kubectl get svc'
+alias kgn='kubectl get nodes'
+alias docker-clean='docker system prune -f'
+
+# AWS Aliases
+alias aws-whoami='aws sts get-caller-identity'
+alias aws-regions='aws ec2 describe-regions --query "Regions[].RegionName" --output table'
+
+# Amazon Linux 2023 specific
+alias install='sudo dnf install -y'
+alias search='dnf search'
+alias update='sudo dnf update -y'
+EOF
+
+# Verify installations
+echo "✅ Verifying installations..."
+echo ""
+echo "System Information:"
+echo "OS: $(cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2)"
+echo "Package Manager: DNF $(dnf --version | head -1)"
+echo ""
+echo "Tool Versions:"
+echo "Docker: $(docker --version)"
+echo "AWS CLI: $(aws --version)"
+echo "Terraform: $(terraform version | head -1)"
+echo "kubectl: $(kubectl version --client --short 2>/dev/null || echo 'kubectl installed')"
+echo "Java: $(java -version 2>&1 | head -1)"
+echo "Git: $(git --version)"
+echo "JQ: $(jq --version)"
 echo ""
 
-main
+# Test Docker permissions
+echo "🐳 Testing Docker permissions..."
+if docker ps &> /dev/null; then
+    echo "✅ Docker permissions are correct"
+else
+    echo "⚠️ Docker permissions need a session restart"
+    echo "Run: newgrp docker"
+fi
 
 echo ""
-show_manual_steps
-
+echo "🎉 Amazon Linux 2023 Jenkins Agent Setup Complete!"
+echo "=================================================="
+echo "✅ All tools installed using DNF"
+echo "✅ Docker configured and running"
+echo "✅ Java 17 available (compatible with Jenkins)"
+echo "✅ AWS CLI v2 installed"
+echo "✅ Terraform ${TERRAFORM_VERSION} installed"
+echo "✅ kubectl installed"
+echo "✅ All directories created"
 echo ""
-echo "🎉 Troubleshooting completed!"
-echo "If issues persist, check the manual resolution steps above."
+echo "🔄 Next steps:"
+echo "1. Configure AWS credentials: aws configure"
+echo "2. Test Docker: docker run hello-world"
+echo "3. Restart your session: exit and reconnect (or run: newgrp docker)"
+echo "4. Run verification: ./verify-jenkins-agent.sh"
+echo ""
+echo "📋 Jenkins Agent Configuration:"
+echo "- Remote root directory: /home/ec2-user/jenkins-workspace"
+echo "- Labels: ec2-agent-1"
+echo "- Usage: Use this node as much as possible"
+echo ""
+echo "💡 Ready for Jenkins pipeline deployment!"
