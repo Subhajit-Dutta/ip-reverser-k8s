@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Minikube Setup Script for AWS EC2 - SYNTAX FIXED VERSION
-# This script installs and configures Minikube with Docker driver
+# Minikube Setup Script for AWS EC2 - VERSION 8 (FINAL CLEAN)
+# This script completely eliminates template variable conflicts
 
 set -e
 
@@ -11,7 +11,7 @@ exec 2>&1
 
 echo "Starting Minikube setup at $(date)"
 
-# Variables from Terraform - Use EXACTLY what Terraform passes
+# Variables from Terraform
 echo "Cluster Name: ${cluster_name}"
 echo "Environment: ${environment}"
 echo "Minikube Version: ${minikube_version}"
@@ -54,48 +54,30 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] 
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io
 
-# Configure Docker and fix group membership immediately
+# Configure Docker
 systemctl enable docker
 systemctl start docker
-
-# Add ubuntu user to docker group
 usermod -aG docker ubuntu
 
-# Wait for Docker to be fully ready
+# Wait for Docker to be ready
 echo "Waiting for Docker daemon to be fully ready..."
 sleep 10
 
-# Fix Docker socket permissions immediately (critical for Terraform execution)
+# Fix Docker socket permissions
 chmod 666 /var/run/docker.sock
 chown root:docker /var/run/docker.sock
 
-# Verify Docker daemon is running and accessible
+# Verify Docker
 if ! systemctl is-active docker >/dev/null; then
     echo "ERROR: Docker service is not running"
-    systemctl status docker
     exit 1
-fi
-
-# Test Docker access as ubuntu user
-if sudo -u ubuntu docker version >/dev/null 2>&1; then
-    echo "✅ Docker access verified for ubuntu user"
-else
-    echo "❌ Docker access failed for ubuntu user - forcing fix"
-    # Force fix docker access
-    chmod 777 /var/run/docker.sock
-    if sudo -u ubuntu docker version >/dev/null 2>&1; then
-        echo "✅ Docker access fixed"
-    else
-        echo "❌ Docker access still failing"
-        exit 1
-    fi
 fi
 
 echo "Docker configuration completed successfully"
 
 # Configure Docker daemon for Minikube
 mkdir -p /etc/docker
-cat <<EOF > /etc/docker/daemon.json
+cat <<DOCKEREOF > /etc/docker/daemon.json
 {
   "exec-opts": ["native.cgroupdriver=systemd"],
   "log-driver": "json-file",
@@ -105,13 +87,10 @@ cat <<EOF > /etc/docker/daemon.json
   "storage-driver": "overlay2",
   "insecure-registries": ["10.96.0.0/12", "192.168.0.0/16"]
 }
-EOF
+DOCKEREOF
 
 systemctl daemon-reload
 systemctl restart docker
-
-# Wait for Docker to be ready
-echo "Waiting for Docker to be ready..."
 sleep 10
 
 # Install kubectl
@@ -126,167 +105,112 @@ curl -LO "https://storage.googleapis.com/minikube/releases/${minikube_version}/m
 chmod +x minikube-linux-amd64
 mv minikube-linux-amd64 /usr/local/bin/minikube
 
-# Install crictl (Container Runtime Interface CLI)
+# Install crictl
 echo "Installing crictl..."
 CRICTL_VERSION="v1.28.0"
 curl -L "https://github.com/kubernetes-sigs/cri-tools/releases/download/$CRICTL_VERSION/crictl-$CRICTL_VERSION-linux-amd64.tar.gz" | tar -C /usr/local/bin -xz
 
 # Configure system for Minikube
 echo "Configuring system for Minikube..."
-
-# Disable swap
 swapoff -a
 sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 
-# Load kernel modules
 modprobe br_netfilter
 echo 'br_netfilter' >> /etc/modules-load.d/minikube.conf
 
-# Set sysctl parameters
-cat <<EOF > /etc/sysctl.d/minikube.conf
+cat <<SYSCTLEOF > /etc/sysctl.d/minikube.conf
 net.bridge.bridge-nf-call-iptables  = 1
 net.bridge.bridge-nf-call-ip6tables = 1
 net.ipv4.ip_forward                 = 1
-EOF
+SYSCTLEOF
 
 sysctl --system
 
-# Start Minikube as ubuntu user
+# Create configuration files for the startup script
+echo "${minikube_memory}" > /tmp/minikube-memory
+echo "${minikube_cpus}" > /tmp/minikube-cpus
+echo "${minikube_driver}" > /tmp/minikube-driver
+echo "${kubernetes_version}" > /tmp/minikube-k8s-version
+
+# Create startup script using base64 encoding to avoid ALL quoting issues
+base64 -d <<ENCODED_SCRIPT > /tmp/start-minikube.sh
+IyEvYmluL2Jhc2gKc2V0IC1lCgpleHBvcnQgTUlOSUtVQkVfSE9NRT0vaG9tZS91YnVudHUvLm1p
+bmlrdWJlCmV4cG9ydCBLVUJFQ09ORklHPS9ob21lL3VidW50dS8ua3ViZS9jb25maWcKZXhwb3J0
+IENIQU5HRV9NSU5JS1VCRV9OT05FX1VTRVI9dHJ1ZQoKZWNobyAiU3RhcnRpbmcgTWluaWt1YmUg
+YXMgdWJ1bnR1IHVzZXIuLi4iCmVjaG8gIkN1cnJlbnQgdXNlcjogJCh3aG9hbWkpIgplY2hvICJI
+b21lIGRpcmVjdG9yeTogJEhPTUUiCgojIFNldCB1cCBkaXJlY3Rvcmllcwpta2RpciAtcCAvaG9t
+ZS91YnVudHUvLm1pbmlrdWJlCm1rZGlyIC1wIC9ob21lL3VidW50dS8ua3ViZQpjaG93biAtUiB1
+YnVudHU6dWJ1bnR1IC9ob21lL3VidW50dS8ubWluaWt1YmUKY2hvd24gLVIgdWJ1bnR1OnVidW50
+dSAvaG9tZS91YnVudHUvLmt1YmUKCiMgVGVzdCBEb2NrZXIgYWNjZXNzCmVjaG8gIlRlc3Rpbmcg
+RG9ja2VyIGFjY2Vzcy4uLiIKaWYgISBkb2NrZXIgcHMgPi9kZXYvbnVsbCAyPiYxOyB0aGVuCiAg
+ICBlY2hvICJEb2NrZXIgYWNjZXNzIGZhaWxlZCwgYXR0ZW1wdGluZyB0byBmaXguLi4iCiAgICBz
+dWRvIGNobW9kIDY2NiAvdmFyL3J1bi9kb2NrZXIuc29jawogICAgaWYgISBkb2NrZXIgcHMgPi9k
+ZXYvbnVsbCAyPiYxOyB0aGVuCiAgICAgICAgZWNobyAiRG9ja2VyIGFjY2VzcyBzdGlsbCBmYWls
+aW5nIgogICAgICAgIGV4aXQgMQogICAgZmkKZmkKZWNobyAiRG9ja2VyIGFjY2VzcyBjb25maXJt
+ZWQiCgojIEdldCBzeXN0ZW0gcmVzb3VyY2VzIGFuZCByZWFkIGNvbmZpZ3VyYXRpb24gZnJvbSBm
+aWxlcwpUT1RBTF9NRU09JChmcmVlIC1tIHwgZ3JlcCBNZW0gfCBhd2sgJ3twcmludCAkMn0nKQpD
+UFVfQ09SRVM9JChucHJvYykKUkVRVUVTVEVEX01FTT0kKGNhdCAvdG1wL21pbmlrdWJlLW1lbW9y
+eSkKUkVRVUVTVEVEX0NQVVM9JChjYXQgL3RtcC9taW5pa3ViZS1jcHVzKQpEUklWRVI9JChjYXQg
+L3RtcC9taW5pa3ViZS1kcml2ZXIpCks4U19WRVJTSU9OPSQoY2F0IC90bXAvbWluaWt1YmUtazhz
+LXZlcnNpb24pCgplY2hvICJTeXN0ZW0gcmVzb3VyY2VzOiIKZWNobyAiICBUb3RhbCBNZW1vcnk6
+ICR7VE9UQUxfTUVNfU1CIgplY2hvICIgIENQVSBDb3JlczogJHtDUFVfQ09SRVN9IgplY2hvICIg
+IFJlcXVlc3RlZCBNZW1vcnk6ICR7UkVRVUVTVEVEX01FTX1NQiIKZWNobyAiICBSZXF1ZXN0ZWQg
+Q1BVczogJHtSRVFVRVNURURfQ1BVU30iCgojIENhbGN1bGF0ZSBhcHByb3ByaWF0ZSByZXNvdXJj
+ZXMKTUlOSUtVQkVfTUVNPSRSRVFVRVNURURfTUVNCk1JTklLVUJFX0NQVVM9JFJFUVVFU1RFRF9D
+UFVTCgppZiBbICRUT1RBTF9NRU0gLWx0ICRSRVFVRVNURURfTUVNIF07IHRoZW4KICAgIE1JTklL
+VUJFX01FTT0kKChUT1RBTF9NRU0gLSA1MTIpKQogICAgZWNobyAiQWRqdXN0aW5nIG1lbW9yeSB0
+byAke01JTklLVUJFX01FTX1NQiIKZmkKCmlmIFsgJENQVV9DT1JFUyAtbHQgJFJFUVVFU1RFRF9D
+UFVTIF07IHRoZW4KICAgIE1JTklLVUJFX0NQVVM9JENQVV9DT1JFUwogICAgZWNobyAiQWRqdXN0
+aW5nIENQVXMgdG8gJHtNSU5JS1VCRV9DUFVTFSI7CmZpCgplY2hvICJTdGFydGluZyBNaW5pa3Vi
+ZSB3aXRoOiIKZWNobyAiICBNZW1vcnk6ICR7TUlOSUtVQkVfTUVNfU1CIgplY2hvICIgIENQVXM6
+ICR7TUlOSUtVQkVfQ1BVU30iCmVjaG8gIiAgRHJpdmVyOiAke0RSSVZFUn0iCmVjaG8gIiAgS3Vi
+ZXJuZXRlczogJHtLOFNfVkVSU0lPTn0iCgojIFN0YXJ0IE1pbmlrdWJlCmlmIG1pbmlrdWJlIHN0
+YXJ0IFwKICAgIC0tZHJpdmVyPSREUklWRVIgXAogICAgLS1tZW1vcnk9JE1JTklLVUJFX01FTSBc
+CiAgICAtLWNwdXM9JE1JTklLVUJFX0NQVVMgXAogICAgLS1rdWJlcm5ldGVzLXZlcnNpb249JEs4
+U19WRVJTSU9OIFwKICAgIC0tZGVsZXRlLW9uLWZhaWx1cmUgXAogICAgLS1mb3JjZSBcCiAgICAt
+LXdhaXQ9dHJ1ZSBcCiAgICAtLXdhaXQtdGltZW91dD02MDBzIFwKICAgIC0tdj0zOyB0aGVuCiAg
+ICBlY2hvICJNaW5pa3ViZSBzdGFydGVkIHN1Y2Nlc3NmdWxseSIKZWxzZQogICAgZWNobyAiTWlu
+aWt1YmUgc3RhcnQgZmFpbGVkIgogICAgbWluaWt1YmUgbG9ncyB8fCBlY2hvICJObyBsb2dzIGF2
+YWlsYWJsZSIKICAgIGV4aXQgMQpmaQoKIyBWZXJpZnkgY2x1c3RlcgplY2hvICJWZXJpZnlpbmcg
+Y2x1c3Rlci4uLiIKbWluaWt1YmUgc3RhdHVzCmt1YmVjdGwgZ2V0IG5vZGVzCgojIFdhaXQgZm9y
+IGNsdXN0ZXIgdG8gYmUgcmVhZHkKZWNobyAiV2FpdGluZyBmb3IgY2x1c3RlciByZWFkaW5lc3Mu
+Li4iCnRpbWVvdXQgMzAwIGJhc2ggLWMgJ3VudGlsIGt1YmVjdGwgZ2V0IG5vZGVzIHwgZ3JlcCAt
+cSAiUmVhZHkiOyBkbyBlY2hvICJXYWl0aW5nLi4uIjsgc2xlZXAgMTA7IGRvbmUnCgojIEVuYWJs
+ZSBhZGRvbnMKZWNobyAiRW5hYmxpbmcgYWRkb25zLi4uIgptaW5pa3ViZSBhZGRvbnMgZW5hYmxl
+IHN0b3JhZ2UtcHJvdmlzaW9uZXIgfHwgdHJ1ZQptaW5pa3ViZSBhZGRvbnMgZW5hYmxlIGRlZmF1
+bHQtc3RvcmFnZWNsYXNzIHx8IHRydWUKbWluaWt1YmUgYWRkb25zIGVuYWJsZSBkYXNoYm9hcmQg
+fHwgZWNobyAiRGFzaGJvYXJkIGZhaWxlZCIKbWluaWt1YmUgYWRkb25zIGVuYWJsZSBtZXRyaWNz
+LXNlcnZlciB8fCBlY2hvICJNZXRyaWNzLXNlcnZlciBmYWlsZWQiCgplY2hvICJNaW5pa3ViZSBz
+ZXR1cCBjb21wbGV0ZWQgc3VjY2Vzc2Z1bGx5ISIK
+ENCODED_SCRIPT
+
+chmod +x /tmp/start-minikube.sh
+
+# Run the Minikube setup as ubuntu user
 echo "Starting Minikube cluster..."
+sudo -i -u ubuntu /tmp/start-minikube.sh
 
-# Start Minikube directly using the variables from Terraform
-sudo -i -u ubuntu bash -c "
-    set -e
-    
-    echo 'Starting Minikube as ubuntu user...'
-    echo 'Current user: \$(whoami)'
-    echo 'Home directory: \$HOME'
-    echo 'Docker groups: \$(groups)'
-    
-    # Set environment variables
-    export MINIKUBE_HOME=/home/ubuntu/.minikube
-    export KUBECONFIG=/home/ubuntu/.kube/config
-    export CHANGE_MINIKUBE_NONE_USER=true
-    
-    # Create directories with proper permissions
-    mkdir -p /home/ubuntu/.minikube
-    mkdir -p /home/ubuntu/.kube
-    chown -R ubuntu:ubuntu /home/ubuntu/.minikube
-    chown -R ubuntu:ubuntu /home/ubuntu/.kube
-    
-    # Check Docker access
-    echo 'Testing Docker access...'
-    if docker ps >/dev/null 2>&1; then
-        echo '✅ Docker access confirmed'
-    else
-        echo '❌ Docker access failed'
-        echo 'Docker groups: \$(groups | grep docker)'
-        echo 'Retrying with newgrp docker...'
-        newgrp docker <<DOCKERTEST
-docker ps
-DOCKERTEST
-    fi
-    
-    # Check system resources and adjust if needed
-    echo 'Checking system resources:'
-    TOTAL_MEM=\$(free -m | grep Mem | awk '{print \$2}')
-    AVAILABLE_MEM=\$(free -m | grep Mem | awk '{print \$7}')
-    CPU_CORES=\$(nproc)
-    
-    echo \"Available Memory: \$AVAILABLE_MEM MB\" 
-    echo \"CPU Cores: \$CPU_CORES\"
-    echo \"Requested Memory: ${minikube_memory}MB\"
-    echo \"Requested CPUs: ${minikube_cpus}\"
-    
-    # Adjust memory if requested is too high
-    MINIKUBE_MEM=${minikube_memory}
-    if [ \$TOTAL_MEM -lt ${minikube_memory} ]; then
-        MINIKUBE_MEM=\$((TOTAL_MEM - 512))
-        echo \"⚠️  Adjusting memory to \$MINIKUBE_MEM MB (system has \$TOTAL_MEM MB total)\"
-    fi
-    
-    # Adjust CPUs if requested is too high  
-    MINIKUBE_CPUS=${minikube_cpus}
-    if [ \$CPU_CORES -lt ${minikube_cpus} ]; then
-        MINIKUBE_CPUS=\$CPU_CORES
-        echo \"⚠️  Adjusting CPUs to \$MINIKUBE_CPUS (system has \$CPU_CORES cores)\"
-    fi
-    
-    # Start Minikube with configuration - using adjusted values
-    echo 'Starting Minikube with docker driver...'
-    echo \"Command: minikube start --driver=${minikube_driver} --memory=\$MINIKUBE_MEM --cpus=\$MINIKUBE_CPUS --kubernetes-version=${kubernetes_version}\"
-    
-    if minikube start \
-        --driver=${minikube_driver} \
-        --memory=\$MINIKUBE_MEM \
-        --cpus=\$MINIKUBE_CPUS \
-        --kubernetes-version=${kubernetes_version} \
-        --delete-on-failure \
-        --force \
-        --wait=true \
-        --wait-timeout=600s \
-        --v=3; then
-        echo '✅ Minikube started successfully'
-    else
-        echo '❌ Minikube start failed'
-        echo 'Checking logs...'
-        cat /home/ubuntu/.minikube/logs/lastStart.txt 2>/dev/null || echo 'No start log found'
-        minikube logs 2>/dev/null || echo 'No minikube logs available'
-        exit 1
-    fi
-    
-    # Verify Minikube is running
-    echo 'Verifying Minikube status...'
+# Verify installation
+echo "Final verification..."
+sudo -i -u ubuntu bash -c '
+export MINIKUBE_HOME=/home/ubuntu/.minikube
+export KUBECONFIG=/home/ubuntu/.kube/config
+
+if minikube status >/dev/null 2>&1; then
+    echo "✅ Minikube verification successful"
     minikube status
-    
-    # Wait for cluster to be ready
-    echo 'Waiting for cluster to be ready...'
-    timeout 300 bash -c 'until kubectl get nodes | grep -q \"Ready\"; do echo \"Waiting for nodes...\"; sleep 10; done'
-    
-    # Enable basic addons only (to avoid timeout issues)
-    echo 'Enabling essential Minikube addons...'
-    minikube addons enable storage-provisioner || true
-    minikube addons enable default-storageclass || true
-    
-    # Optional addons (enable separately to avoid blocking)
-    echo 'Enabling additional addons...'
-    minikube addons enable dashboard || echo 'Dashboard addon failed, continuing...'
-    minikube addons enable metrics-server || echo 'Metrics-server addon failed, continuing...'
-    
-    # Final status check
-    echo 'Final cluster verification...'
-    minikube status
-    kubectl get nodes
-    kubectl get pods -n kube-system
-    
-    echo 'Minikube setup completed successfully!'
-"
+else
+    echo "❌ Minikube verification failed"
+    exit 1
+fi
+'
 
-# Wait a bit to ensure everything is stable
-sleep 30
-
-# Verify final status
-echo "Final verification as ubuntu user..."
-sudo -i -u ubuntu bash -c "
-    export MINIKUBE_HOME=/home/ubuntu/.minikube
-    export KUBECONFIG=/home/ubuntu/.kube/config
-    
-    if minikube status >/dev/null 2>&1; then
-        echo '✅ Minikube is running'
-        minikube status
-    else
-        echo '❌ Minikube verification failed'
-        echo 'Available profiles:'
-        minikube profile list || echo 'No profiles found'
-        echo 'Attempting to check logs:'
-        minikube logs || echo 'No logs available'
-        exit 1
-    fi
-"
-
-# Create Jenkins service account and RBAC - SIMPLIFIED
+# Create Jenkins service account
 echo "Creating Jenkins service account..."
-sudo -u ubuntu kubectl apply -f - <<EOF
+sudo -i -u ubuntu bash -c '
+export KUBECONFIG=/home/ubuntu/.kube/config
+
+kubectl apply -f - <<JENKINSEOF
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -305,10 +229,11 @@ subjects:
 - kind: ServiceAccount
   name: jenkins-deployer
   namespace: default
-EOF
+JENKINSEOF
+'
 
-# Create cluster information file
-cat <<EOF > /home/ubuntu/cluster-info.txt
+# Create cluster info file
+cat <<INFOEOF > /home/ubuntu/cluster-info.txt
 Minikube Cluster Information
 ===========================
 
@@ -332,25 +257,19 @@ Access Information:
 - SSH: ssh -i ${cluster_name}-key.pem ubuntu@$PUBLIC_IP
 - Kubernetes API: https://$PRIVATE_IP:8443
 
-Useful Commands:
-- minikube status
-- minikube dashboard --url
-- kubectl get nodes
-- kubectl get pods --all-namespaces
-
 Setup completed at: $(date)
-EOF
+INFOEOF
 
 chown ubuntu:ubuntu /home/ubuntu/cluster-info.txt
 
-# Create useful scripts
-cat <<'EOF' > /home/ubuntu/start-dashboard.sh
+# Create utility scripts
+cat <<'DASHEOF' > /home/ubuntu/start-dashboard.sh
 #!/bin/bash
 echo "Starting Kubernetes Dashboard..."
 minikube dashboard --url
-EOF
+DASHEOF
 
-cat <<'EOF' > /home/ubuntu/cluster-health-check.sh
+cat <<'HEALTHEOF' > /home/ubuntu/cluster-health-check.sh
 #!/bin/bash
 echo "=== Minikube Cluster Health Check ==="
 echo "Date: $(date)"
@@ -366,15 +285,15 @@ kubectl get pods -n kube-system
 echo ""
 echo "All Namespaces:"
 kubectl get all --all-namespaces
-EOF
+HEALTHEOF
 
 chmod +x /home/ubuntu/start-dashboard.sh
 chmod +x /home/ubuntu/cluster-health-check.sh
 chown ubuntu:ubuntu /home/ubuntu/start-dashboard.sh
 chown ubuntu:ubuntu /home/ubuntu/cluster-health-check.sh
 
-# Create systemd service for Minikube auto-start
-cat <<EOF > /etc/systemd/system/minikube.service
+# Create systemd service
+cat <<SERVICEEOF > /etc/systemd/system/minikube.service
 [Unit]
 Description=Minikube Kubernetes Cluster
 After=docker.service
@@ -391,39 +310,30 @@ Environment=MINIKUBE_HOME=/home/ubuntu/.minikube
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SERVICEEOF
 
 systemctl enable minikube.service
 
-# Final status check and success signal
+# Final health check
 echo "Performing final health check..."
-sudo -i -u ubuntu bash -c "
-    export MINIKUBE_HOME=/home/ubuntu/.minikube
-    export KUBECONFIG=/home/ubuntu/.kube/config
-    
-    echo 'Checking Minikube status...'
-    if minikube status; then
-        echo 'Getting cluster nodes...'
-        kubectl get nodes
-        echo 'Getting system pods...'
-        kubectl get pods -n kube-system
-    else
-        echo 'Minikube status check failed'
-        minikube profile list || echo 'No profiles available'
-    fi
-"
+sudo -i -u ubuntu bash -c '
+export MINIKUBE_HOME=/home/ubuntu/.minikube
+export KUBECONFIG=/home/ubuntu/.kube/config
 
-# Create success marker file for Terraform to detect
+echo "Final cluster status:"
+minikube status
+kubectl get nodes
+kubectl get pods -n kube-system
+'
+
+# Create success marker
 echo "SUCCESS: Minikube cluster is ready" > /tmp/minikube-ready
 chown ubuntu:ubuntu /tmp/minikube-ready
 
 echo "✅ Minikube cluster setup completed successfully at $(date)"
 echo "🎉 Cluster is ready for deployments!"
-echo ""
-echo "📋 Next steps:"
-echo "1. SSH to instance and run: ./cluster-health-check.sh"
-echo "2. Access dashboard: ./start-dashboard.sh"
-echo "3. Test deployment: kubectl run test-pod --image=nginx"
+
+# Cleanup temporary files
+rm -f /tmp/start-minikube.sh /tmp/minikube-memory /tmp/minikube-cpus /tmp/minikube-driver /tmp/minikube-k8s-version
 
 echo "Setup script completed successfully!"
-echo "Minikube is running and ready to accept connections."
