@@ -11,7 +11,7 @@ exec 2>&1
 
 echo "Starting Minikube setup at $(date)"
 
-# Variables from Terraform - CORRECTED VARIABLE NAMES
+# Variables from Terraform - Using the exact variable names passed from Terraform
 CLUSTER_NAME="${cluster_name}"
 ENVIRONMENT="${environment}"
 MINIKUBE_VERSION="${minikube_version}"
@@ -29,6 +29,8 @@ echo "Instance Public IP: $PUBLIC_IP"
 echo "Cluster Name: $CLUSTER_NAME"
 echo "Minikube Version: $MINIKUBE_VERSION"
 echo "Kubernetes Version: $KUBERNETES_VERSION"
+echo "Minikube Memory: $MINIKUBE_MEMORY"
+echo "Minikube CPUs: $MINIKUBE_CPUS"
 
 # Update system
 echo "Updating system packages..."
@@ -120,75 +122,63 @@ EOF
 
 sysctl --system
 
-# Start Minikube as ubuntu user - FIXED VERSION
+# Start Minikube as ubuntu user
 echo "Starting Minikube cluster..."
 
-# Create a script to run as ubuntu user with variable substitution
-cat <<MINIKUBE_SCRIPT > /tmp/start_minikube.sh
-#!/bin/bash
-set -e
-
-echo "Starting Minikube as ubuntu user..."
-
-# Set environment variables
-export MINIKUBE_HOME=/home/ubuntu/.minikube
-export KUBECONFIG=/home/ubuntu/.kube/config
-export CHANGE_MINIKUBE_NONE_USER=true
-
-# Create directories with proper permissions
-mkdir -p /home/ubuntu/.minikube
-mkdir -p /home/ubuntu/.kube
-chown -R ubuntu:ubuntu /home/ubuntu/.minikube
-chown -R ubuntu:ubuntu /home/ubuntu/.kube
-
-# Start Minikube with better error handling
-echo "Starting Minikube with docker driver..."
-minikube start \\
-    --driver=docker \\
-    --memory=$MINIKUBE_MEMORY \\
-    --cpus=$MINIKUBE_CPUS \\
-    --kubernetes-version=$KUBERNETES_VERSION \\
-    --delete-on-failure \\
-    --force \\
-    --wait=true \\
-    --wait-timeout=600s
-
-# Verify Minikube is running
-echo "Verifying Minikube status..."
-minikube status
-
-# Wait for cluster to be ready
-echo "Waiting for cluster to be ready..."
-timeout 300 bash -c 'until kubectl get nodes | grep -q "Ready"; do echo "Waiting for nodes..."; sleep 10; done'
-
-# Enable basic addons only (to avoid timeout issues)
-echo "Enabling essential Minikube addons..."
-minikube addons enable storage-provisioner || true
-minikube addons enable default-storageclass || true
-
-# Optional addons (enable separately to avoid blocking)
-echo "Enabling additional addons..."
-minikube addons enable dashboard || echo "Dashboard addon failed, continuing..."
-minikube addons enable metrics-server || echo "Metrics-server addon failed, continuing..."
-
-# Final status check
-echo "Final cluster verification..."
-minikube status
-kubectl get nodes
-kubectl get pods -n kube-system
-
-echo "Minikube setup completed successfully!"
-MINIKUBE_SCRIPT
-
-# Make the script executable
-chmod +x /tmp/start_minikube.sh
-
-# Execute as ubuntu user with proper environment
+# Start Minikube directly without separate script file to avoid variable issues
 sudo -i -u ubuntu bash -c "
-    export HOME=/home/ubuntu
+    set -e
+    
+    echo 'Starting Minikube as ubuntu user...'
+    
+    # Set environment variables
     export MINIKUBE_HOME=/home/ubuntu/.minikube
     export KUBECONFIG=/home/ubuntu/.kube/config
-    /tmp/start_minikube.sh
+    export CHANGE_MINIKUBE_NONE_USER=true
+    
+    # Create directories with proper permissions
+    mkdir -p /home/ubuntu/.minikube
+    mkdir -p /home/ubuntu/.kube
+    chown -R ubuntu:ubuntu /home/ubuntu/.minikube
+    chown -R ubuntu:ubuntu /home/ubuntu/.kube
+    
+    # Start Minikube with configuration
+    echo 'Starting Minikube with docker driver...'
+    minikube start \
+        --driver=docker \
+        --memory=$MINIKUBE_MEMORY \
+        --cpus=$MINIKUBE_CPUS \
+        --kubernetes-version=$KUBERNETES_VERSION \
+        --delete-on-failure \
+        --force \
+        --wait=true \
+        --wait-timeout=600s
+    
+    # Verify Minikube is running
+    echo 'Verifying Minikube status...'
+    minikube status
+    
+    # Wait for cluster to be ready
+    echo 'Waiting for cluster to be ready...'
+    timeout 300 bash -c 'until kubectl get nodes | grep -q \"Ready\"; do echo \"Waiting for nodes...\"; sleep 10; done'
+    
+    # Enable basic addons only (to avoid timeout issues)
+    echo 'Enabling essential Minikube addons...'
+    minikube addons enable storage-provisioner || true
+    minikube addons enable default-storageclass || true
+    
+    # Optional addons (enable separately to avoid blocking)
+    echo 'Enabling additional addons...'
+    minikube addons enable dashboard || echo 'Dashboard addon failed, continuing...'
+    minikube addons enable metrics-server || echo 'Metrics-server addon failed, continuing...'
+    
+    # Final status check
+    echo 'Final cluster verification...'
+    minikube status
+    kubectl get nodes
+    kubectl get pods -n kube-system
+    
+    echo 'Minikube setup completed successfully!'
 "
 
 # Wait a bit to ensure everything is stable
@@ -334,4 +324,5 @@ echo "2. Access dashboard: ./start-dashboard.sh"
 echo "3. Test deployment: kubectl run test-pod --image=nginx"
 
 echo "Setup script completed successfully!"
+echo "Minikube is running and ready to accept connections."
 echo "Minikube is running and ready to accept connections."
