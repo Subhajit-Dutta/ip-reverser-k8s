@@ -9,7 +9,7 @@ set -e
 exec > >(tee /var/log/minikube-setup.log)
 exec 2>&1
 
-echo "Starting Minikube setup at $(date)"
+echo "Starting Minikube setup at $$(date)"
 
 # Variables from Terraform - Use EXACTLY what Terraform passes
 echo "Cluster Name: ${cluster_name}"
@@ -21,11 +21,11 @@ echo "Minikube Memory: ${minikube_memory}"
 echo "Minikube CPUs: ${minikube_cpus}"
 
 # Get instance metadata
-PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
-PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+PRIVATE_IP=$$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+PUBLIC_IP=$$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
 
-echo "Instance Private IP: $PRIVATE_IP"
-echo "Instance Public IP: $PUBLIC_IP"
+echo "Instance Private IP: $$PRIVATE_IP"
+echo "Instance Public IP: $$PUBLIC_IP"
 
 # Update system
 echo "Updating system packages..."
@@ -49,7 +49,7 @@ apt-get install -y \
 # Install Docker
 echo "Installing Docker..."
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $$(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io
@@ -129,14 +129,14 @@ mv minikube-linux-amd64 /usr/local/bin/minikube
 # Install crictl (Container Runtime Interface CLI)
 echo "Installing crictl..."
 CRICTL_VERSION="v1.28.0"
-curl -L "https://github.com/kubernetes-sigs/cri-tools/releases/download/$CRICTL_VERSION/crictl-$CRICTL_VERSION-linux-amd64.tar.gz" | tar -C /usr/local/bin -xz
+curl -L "https://github.com/kubernetes-sigs/cri-tools/releases/download/$$CRICTL_VERSION/crictl-$$CRICTL_VERSION-linux-amd64.tar.gz" | tar -C /usr/local/bin -xz
 
 # Configure system for Minikube
 echo "Configuring system for Minikube..."
 
 # Disable swap
 swapoff -a
-sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+sed -i '/ swap / s/^\(.*\)$$/#\1/g' /etc/fstab
 
 # Load kernel modules
 modprobe br_netfilter
@@ -159,9 +159,9 @@ sudo -i -u ubuntu bash -c "
     set -e
     
     echo 'Starting Minikube as ubuntu user...'
-    echo 'Current user: \$(whoami)'
-    echo 'Home directory: \$HOME'
-    echo 'Docker groups: \$(groups)'
+    echo 'Current user: \$$(whoami)'
+    echo 'Home directory: \$$HOME'
+    echo 'Docker groups: \$$(groups)'
     
     # Set environment variables
     export MINIKUBE_HOME=/home/ubuntu/.minikube
@@ -180,7 +180,7 @@ sudo -i -u ubuntu bash -c "
         echo '✅ Docker access confirmed'
     else
         echo '❌ Docker access failed'
-        echo 'Docker groups: \$(groups | grep docker)'
+        echo 'Docker groups: \$$(groups | grep docker)'
         echo 'Retrying with newgrp docker...'
         newgrp docker <<DOCKERTEST
 docker ps
@@ -189,37 +189,37 @@ DOCKERTEST
     
     # Check system resources and adjust if needed
     echo 'Checking system resources:'
-    TOTAL_MEM=\$(free -m | grep Mem | awk '{print \$2}')
-    AVAILABLE_MEM=\$(free -m | grep Mem | awk '{print \$7}')
-    CPU_CORES=\$(nproc)
+    TOTAL_MEM=\$$(free -m | grep Mem | awk '{print \$$2}')
+    AVAILABLE_MEM=\$$(free -m | grep Mem | awk '{print \$$7}')
+    CPU_CORES=\$$(nproc)
     
-    echo \"Available Memory: \${AVAILABLE_MEM}MB\" 
-    echo \"CPU Cores: \${CPU_CORES}\"
+    echo \"Available Memory: \$$AVAILABLE_MEM MB\" 
+    echo \"CPU Cores: \$$CPU_CORES\"
     echo \"Requested Memory: ${minikube_memory}MB\"
     echo \"Requested CPUs: ${minikube_cpus}\"
     
     # Adjust memory if requested is too high
     MINIKUBE_MEM=${minikube_memory}
-    if [ \$TOTAL_MEM -lt ${minikube_memory} ]; then
-        MINIKUBE_MEM=\$((TOTAL_MEM - 512))
-        echo \"⚠️  Adjusting memory to \${MINIKUBE_MEM}MB (system has \${TOTAL_MEM}MB total)\"
+    if [ \$$TOTAL_MEM -lt ${minikube_memory} ]; then
+        MINIKUBE_MEM=\$$((TOTAL_MEM - 512))
+        echo \"⚠️  Adjusting memory to \$$MINIKUBE_MEM MB (system has \$$TOTAL_MEM MB total)\"
     fi
     
     # Adjust CPUs if requested is too high  
     MINIKUBE_CPUS=${minikube_cpus}
-    if [ \$CPU_CORES -lt ${minikube_cpus} ]; then
-        MINIKUBE_CPUS=\$CPU_CORES
-        echo \"⚠️  Adjusting CPUs to \${MINIKUBE_CPUS} (system has \${CPU_CORES} cores)\"
+    if [ \$$CPU_CORES -lt ${minikube_cpus} ]; then
+        MINIKUBE_CPUS=\$$CPU_CORES
+        echo \"⚠️  Adjusting CPUs to \$$MINIKUBE_CPUS (system has \$$CPU_CORES cores)\"
     fi
     
     # Start Minikube with configuration - using adjusted values
     echo 'Starting Minikube with docker driver...'
-    echo \"Command: minikube start --driver=${minikube_driver} --memory=\${MINIKUBE_MEM} --cpus=\${MINIKUBE_CPUS} --kubernetes-version=${kubernetes_version}\"
+    echo \"Command: minikube start --driver=${minikube_driver} --memory=\$$MINIKUBE_MEM --cpus=\$$MINIKUBE_CPUS --kubernetes-version=${kubernetes_version}\"
     
     if minikube start \
         --driver=${minikube_driver} \
-        --memory=\$MINIKUBE_MEM \
-        --cpus=\$MINIKUBE_CPUS \
+        --memory=\$$MINIKUBE_MEM \
+        --cpus=\$$MINIKUBE_CPUS \
         --kubernetes-version=${kubernetes_version} \
         --delete-on-failure \
         --force \
@@ -303,12 +303,12 @@ Minikube Cluster Information
 
 Cluster Name: ${cluster_name}
 Environment: ${environment}
-Setup Date: $(date)
+Setup Date: $$(date)
 
 Instance Information:
-- Private IP: $PRIVATE_IP
-- Public IP: $PUBLIC_IP
-- Instance Type: $(curl -s http://169.254.169.254/latest/meta-data/instance-type)
+- Private IP: $$PRIVATE_IP
+- Public IP: $$PUBLIC_IP
+- Instance Type: $$(curl -s http://169.254.169.254/latest/meta-data/instance-type)
 
 Minikube Configuration:
 - Version: ${minikube_version}
@@ -318,8 +318,8 @@ Minikube Configuration:
 - CPUs: ${minikube_cpus}
 
 Access Information:
-- SSH: ssh -i ${cluster_name}-key.pem ubuntu@$PUBLIC_IP
-- Kubernetes API: https://$PRIVATE_IP:8443
+- SSH: ssh -i ${cluster_name}-key.pem ubuntu@$$PUBLIC_IP
+- Kubernetes API: https://$$PRIVATE_IP:8443
 
 Useful Commands:
 - minikube status
@@ -327,7 +327,7 @@ Useful Commands:
 - kubectl get nodes
 - kubectl get pods --all-namespaces
 
-Setup completed at: $(date)
+Setup completed at: $$(date)
 EOF
 
 chown ubuntu:ubuntu /home/ubuntu/cluster-info.txt
@@ -342,7 +342,7 @@ EOF
 cat <<'EOF' > /home/ubuntu/cluster-health-check.sh
 #!/bin/bash
 echo "=== Minikube Cluster Health Check ==="
-echo "Date: $(date)"
+echo "Date: $$(date)"
 echo ""
 echo "Minikube Status:"
 minikube status
@@ -396,7 +396,7 @@ sudo -u ubuntu bash -c "
 echo "SUCCESS: Minikube cluster is ready" > /tmp/minikube-ready
 chown ubuntu:ubuntu /tmp/minikube-ready
 
-echo "✅ Minikube cluster setup completed successfully at $(date)"
+echo "✅ Minikube cluster setup completed successfully at $$(date)"
 echo "🎉 Cluster is ready for deployments!"
 echo ""
 echo "📋 Next steps:"
