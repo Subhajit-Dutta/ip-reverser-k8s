@@ -1,131 +1,229 @@
 #!/bin/bash
 
-# Jenkins Agent Setup Script for Amazon Linux 2
-# This script installs all required tools for the Minikube pipeline
+# Amazon Linux Package Conflict Troubleshooter
+# This script helps resolve common package conflicts on Amazon Linux
 
 set -e
 
-echo "🚀 Setting up Jenkins Agent on Amazon Linux 2"
-echo "============================================="
+echo "🔧 Amazon Linux Package Conflict Troubleshooter"
+echo "==============================================="
 
-# Update system
-echo "📦 Updating system packages..."
-sudo yum update -y
+# Function to check and resolve package conflicts
+resolve_conflicts() {
+    echo "🔍 Checking for package conflicts..."
+    
+    # Clean yum cache
+    echo "🧹 Cleaning yum cache..."
+    sudo yum clean all
+    
+    # Update package database
+    echo "📦 Updating package database..."
+    sudo yum makecache
+    
+    # Check for broken dependencies
+    echo "🔍 Checking for broken dependencies..."
+    sudo package-cleanup --problems || echo "No package-cleanup tool available"
+    
+    # Try to fix broken packages
+    echo "🔧 Attempting to fix broken packages..."
+    sudo yum update -y --skip-broken
+}
 
-# Install essential packages
-echo "🔧 Installing essential packages..."
-sudo yum install -y \
-    wget \
-    curl \
-    unzip \
-    git \
-    jq \
-    nc \
-    tar \
-    gzip
+# Function to install packages with multiple fallback strategies
+install_with_fallbacks() {
+    local package=$1
+    local description=$2
+    
+    echo "📦 Installing $description ($package)..."
+    
+    # Strategy 1: Normal install
+    if sudo yum install -y "$package"; then
+        echo "✅ $description installed successfully"
+        return 0
+    fi
+    
+    echo "⚠️ Normal install failed, trying with --allowerasing..."
+    # Strategy 2: Allow erasing conflicting packages
+    if sudo yum install -y --allowerasing "$package"; then
+        echo "✅ $description installed with --allowerasing"
+        return 0
+    fi
+    
+    echo "⚠️ --allowerasing failed, trying with --skip-broken..."
+    # Strategy 3: Skip broken dependencies
+    if sudo yum install -y --skip-broken "$package"; then
+        echo "✅ $description installed with --skip-broken"
+        return 0
+    fi
+    
+    echo "❌ Failed to install $description, will continue without it"
+    return 1
+}
 
-# Install Docker (for Jenkins Docker operations)
-echo "🐳 Installing Docker..."
-sudo yum install -y docker
-sudo systemctl enable docker
-sudo systemctl start docker
-sudo usermod -aG docker ec2-user
-sudo usermod -aG docker jenkins  # If jenkins user exists
+# Function to check Amazon Linux version
+check_amazon_linux_version() {
+    echo "🔍 Checking Amazon Linux version..."
+    
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        echo "OS: $PRETTY_NAME"
+        echo "Version: $VERSION_ID"
+        
+        # Amazon Linux 2 vs Amazon Linux 2023 have different package managers
+        if [[ "$VERSION_ID" == "2023" ]]; then
+            echo "⚠️ Detected Amazon Linux 2023 - consider using dnf instead of yum"
+            echo "Run: sudo dnf install <packages> instead"
+            return 2023
+        elif [[ "$VERSION_ID" == "2" ]]; then
+            echo "✅ Detected Amazon Linux 2 - yum should work fine"
+            return 2
+        else
+            echo "⚠️ Unknown Amazon Linux version"
+            return 1
+        fi
+    else
+        echo "❌ Cannot determine Amazon Linux version"
+        return 1
+    fi
+}
 
-# Install Java (required for Jenkins agent)
-echo "☕ Installing Java..."
-sudo yum install -y java-11-amazon-corretto
+# Function to install using dnf for Amazon Linux 2023
+install_with_dnf() {
+    echo "🔧 Using DNF package manager for Amazon Linux 2023..."
+    
+    # Update system
+    sudo dnf update -y
+    
+    # Install packages
+    sudo dnf install -y \
+        wget \
+        curl \
+        unzip \
+        git \
+        jq \
+        nc \
+        tar \
+        gzip \
+        docker \
+        java-11-amazon-corretto \
+        which \
+        procps-ng
+}
 
-# Install AWS CLI v2
-echo "☁️ Installing AWS CLI v2..."
-if ! command -v aws &> /dev/null; then
-    cd /tmp
-    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-    unzip awscliv2.zip
-    sudo ./aws/install
-    rm -rf aws awscliv2.zip
-fi
+# Main troubleshooting flow
+main() {
+    # Check Amazon Linux version
+    check_amazon_linux_version
+    AL_VERSION=$?
+    
+    if [ $AL_VERSION -eq 2023 ]; then
+        echo "🚀 Using DNF for Amazon Linux 2023..."
+        install_with_dnf
+        return 0
+    fi
+    
+    # For Amazon Linux 2, continue with yum troubleshooting
+    echo "🚀 Using YUM troubleshooting for Amazon Linux 2..."
+    
+    # Step 1: Resolve existing conflicts
+    resolve_conflicts
+    
+    # Step 2: Install packages with fallbacks
+    echo "📦 Installing essential packages with conflict resolution..."
+    
+    # Core utilities
+    install_with_fallbacks "wget curl unzip git tar gzip which" "Core Utilities"
+    
+    # Network tools
+    install_with_fallbacks "jq" "JSON Processor"
+    install_with_fallbacks "nc" "Netcat"
+    install_with_fallbacks "net-tools" "Network Tools"
+    install_with_fallbacks "bind-utils" "DNS Utils"
+    
+    # Docker
+    install_with_fallbacks "docker" "Docker"
+    
+    # Java (try multiple versions)
+    if ! install_with_fallbacks "java-11-amazon-corretto" "Java 11 Corretto"; then
+        if ! install_with_fallbacks "java-11-openjdk" "Java 11 OpenJDK"; then
+            install_with_fallbacks "java-1.8.0-openjdk" "Java 8 OpenJDK"
+        fi
+    fi
+    
+    # Process tools
+    install_with_fallbacks "procps-ng" "Process Tools"
+    
+    echo "✅ Package installation completed with conflict resolution"
+}
 
-# Install Terraform
-echo "🏗️ Installing Terraform..."
-TERRAFORM_VERSION="1.6.0"
-if ! command -v terraform &> /dev/null; then
-    cd /tmp
-    wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-    unzip terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-    sudo mv terraform /usr/local/bin/
-    rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-fi
+# Function to show manual resolution steps
+show_manual_steps() {
+    echo ""
+    echo "🔧 Manual Resolution Steps:"
+    echo "=========================="
+    echo ""
+    echo "If the automatic resolution fails, try these manual steps:"
+    echo ""
+    echo "1. Check for conflicting packages:"
+    echo "   sudo yum check"
+    echo "   sudo package-cleanup --problems"
+    echo ""
+    echo "2. Remove conflicting packages (if safe):"
+    echo "   sudo yum remove <conflicting-package>"
+    echo ""
+    echo "3. Force install with alternatives:"
+    echo "   sudo yum install -y --allowerasing <package>"
+    echo "   sudo yum install -y --skip-broken <package>"
+    echo ""
+    echo "4. For Amazon Linux 2023, use DNF:"
+    echo "   sudo dnf install -y <package>"
+    echo ""
+    echo "5. Use alternative repositories:"
+    echo "   sudo yum install -y epel-release"
+    echo "   sudo yum install -y <package>"
+    echo ""
+    echo "6. Install from source if package conflicts persist:"
+    echo "   # This should be last resort"
+    echo ""
+    echo "7. Check enabled repositories:"
+    echo "   sudo yum repolist"
+    echo "   sudo yum-config-manager --disable <problematic-repo>"
+    echo ""
+}
 
-# Install kubectl
-echo "☸️ Installing kubectl..."
-if ! command -v kubectl &> /dev/null; then
-    cd /tmp
-    curl -LO "https://dl.k8s.io/release/v1.28.3/bin/linux/amd64/kubectl"
-    chmod +x kubectl
-    sudo mv kubectl /usr/local/bin/
-fi
+# Function to check specific common conflicts
+check_common_conflicts() {
+    echo "🔍 Checking for common Amazon Linux conflicts..."
+    
+    # Check for multiple Java versions
+    echo "☕ Checking Java installations..."
+    rpm -qa | grep -i java | sort
+    
+    # Check for Docker conflicts
+    echo "🐳 Checking Docker installations..."
+    rpm -qa | grep -i docker | sort
+    
+    # Check for repository conflicts
+    echo "📦 Checking enabled repositories..."
+    sudo yum repolist enabled
+    
+    # Check for locked packages
+    echo "🔒 Checking for package locks..."
+    sudo yum versionlock list 2>/dev/null || echo "No version locks found"
+}
 
-# Create necessary directories
-echo "📁 Creating necessary directories..."
-sudo mkdir -p /opt/jenkins
-sudo chown ec2-user:ec2-user /opt/jenkins
+# Run the troubleshooter
+echo "Starting Amazon Linux package conflict resolution..."
+echo ""
 
-# Create workspace directory
-mkdir -p /home/ec2-user/jenkins-workspace
-sudo chown ec2-user:ec2-user /home/ec2-user/jenkins-workspace
+check_common_conflicts
+echo ""
 
-# Verify installations
-echo "✅ Verifying installations..."
-echo "Docker version: $(docker --version)"
-echo "AWS CLI version: $(aws --version)"
-echo "Terraform version: $(terraform version)"
-echo "kubectl version: $(kubectl version --client --short)"
-echo "Java version: $(java -version 2>&1 | head -n 1)"
-
-# Create useful aliases
-echo "🔗 Creating useful aliases..."
-cat <<EOF >> /home/ec2-user/.bashrc
-
-# Jenkins Agent Aliases
-alias tf='terraform'
-alias k='kubectl'
-alias kgp='kubectl get pods'
-alias kgs='kubectl get svc'
-alias kgn='kubectl get nodes'
-alias docker-clean='docker system prune -f'
-
-# AWS Aliases
-alias aws-whoami='aws sts get-caller-identity'
-alias aws-regions='aws ec2 describe-regions --query "Regions[].RegionName" --output table'
-EOF
-
-# Set up SSH key directory
-echo "🔑 Setting up SSH key directory..."
-mkdir -p /home/ec2-user/.ssh
-chmod 700 /home/ec2-user/.ssh
-chown ec2-user:ec2-user /home/ec2-user/.ssh
+main
 
 echo ""
-echo "🎉 Jenkins Agent Setup Complete!"
-echo "================================"
-echo "✅ Docker installed and configured"
-echo "✅ AWS CLI v2 installed"
-echo "✅ Terraform ${TERRAFORM_VERSION} installed"
-echo "✅ kubectl installed"
-echo "✅ Java 11 installed"
-echo "✅ All directories created"
+show_manual_steps
+
 echo ""
-echo "🔄 Please restart your session or run: source ~/.bashrc"
-echo "🔐 Remember to configure AWS credentials on this agent"
-echo ""
-echo "📋 Next steps:"
-echo "1. Configure AWS credentials: aws configure"
-echo "2. Test Docker: docker run hello-world"
-echo "3. Test Terraform: terraform version"
-echo "4. Connect this node to Jenkins master"
-echo ""
-echo "💡 For Jenkins agent connection, you may need to:"
-echo "   - Install Jenkins agent.jar"
-echo "   - Configure the agent in Jenkins UI"
-echo "   - Start the agent service"
+echo "🎉 Troubleshooting completed!"
+echo "If issues persist, check the manual resolution steps above."
