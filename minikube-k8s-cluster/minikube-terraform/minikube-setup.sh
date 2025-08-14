@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Minikube Setup Script for AWS EC2 - FIXED VERSION
+# Minikube Setup Script for AWS EC2 - COMPLETELY FIXED VERSION
 # This script installs and configures Minikube with Docker driver
 
 set -e
@@ -11,14 +11,14 @@ exec 2>&1
 
 echo "Starting Minikube setup at $(date)"
 
-# Variables from Terraform - Using the exact variable names passed from Terraform
-CLUSTER_NAME="${cluster_name}"
-ENVIRONMENT="${environment}"
-MINIKUBE_VERSION="${minikube_version}"
-KUBERNETES_VERSION="${kubernetes_version}"
-MINIKUBE_DRIVER="${minikube_driver}"
-MINIKUBE_MEMORY="${minikube_memory}"
-MINIKUBE_CPUS="${minikube_cpus}"
+# Variables from Terraform - Use EXACTLY what Terraform passes
+echo "Cluster Name: ${cluster_name}"
+echo "Environment: ${environment}"
+echo "Minikube Version: ${minikube_version}"
+echo "Kubernetes Version: ${kubernetes_version}"
+echo "Minikube Driver: ${minikube_driver}"
+echo "Minikube Memory: ${minikube_memory}"
+echo "Minikube CPUs: ${minikube_cpus}"
 
 # Get instance metadata
 PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
@@ -26,11 +26,6 @@ PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
 
 echo "Instance Private IP: $PRIVATE_IP"
 echo "Instance Public IP: $PUBLIC_IP"
-echo "Cluster Name: $CLUSTER_NAME"
-echo "Minikube Version: $MINIKUBE_VERSION"
-echo "Kubernetes Version: $KUBERNETES_VERSION"
-echo "Minikube Memory: $MINIKUBE_MEMORY"
-echo "Minikube CPUs: $MINIKUBE_CPUS"
 
 # Update system
 echo "Updating system packages..."
@@ -87,13 +82,13 @@ sleep 10
 
 # Install kubectl
 echo "Installing kubectl..."
-curl -LO "https://dl.k8s.io/release/$KUBERNETES_VERSION/bin/linux/amd64/kubectl"
+curl -LO "https://dl.k8s.io/release/${kubernetes_version}/bin/linux/amd64/kubectl"
 chmod +x kubectl
 mv kubectl /usr/local/bin/
 
 # Install Minikube
-echo "Installing Minikube $MINIKUBE_VERSION..."
-curl -LO "https://storage.googleapis.com/minikube/releases/$MINIKUBE_VERSION/minikube-linux-amd64"
+echo "Installing Minikube ${minikube_version}..."
+curl -LO "https://storage.googleapis.com/minikube/releases/${minikube_version}/minikube-linux-amd64"
 chmod +x minikube-linux-amd64
 mv minikube-linux-amd64 /usr/local/bin/minikube
 
@@ -125,7 +120,7 @@ sysctl --system
 # Start Minikube as ubuntu user
 echo "Starting Minikube cluster..."
 
-# Start Minikube directly without separate script file to avoid variable issues
+# Start Minikube directly using the variables from Terraform
 sudo -i -u ubuntu bash -c "
     set -e
     
@@ -142,13 +137,13 @@ sudo -i -u ubuntu bash -c "
     chown -R ubuntu:ubuntu /home/ubuntu/.minikube
     chown -R ubuntu:ubuntu /home/ubuntu/.kube
     
-    # Start Minikube with configuration
+    # Start Minikube with configuration - using Terraform variables directly
     echo 'Starting Minikube with docker driver...'
     minikube start \
-        --driver=docker \
-        --memory=$MINIKUBE_MEMORY \
-        --cpus=$MINIKUBE_CPUS \
-        --kubernetes-version=$KUBERNETES_VERSION \
+        --driver=${minikube_driver} \
+        --memory=${minikube_memory} \
+        --cpus=${minikube_cpus} \
+        --kubernetes-version=${kubernetes_version} \
         --delete-on-failure \
         --force \
         --wait=true \
@@ -220,8 +215,8 @@ cat <<EOF > /home/ubuntu/cluster-info.txt
 Minikube Cluster Information
 ===========================
 
-Cluster Name: $CLUSTER_NAME
-Environment: $ENVIRONMENT
+Cluster Name: ${cluster_name}
+Environment: ${environment}
 Setup Date: $(date)
 
 Instance Information:
@@ -230,14 +225,14 @@ Instance Information:
 - Instance Type: $(curl -s http://169.254.169.254/latest/meta-data/instance-type)
 
 Minikube Configuration:
-- Version: $MINIKUBE_VERSION
-- Kubernetes Version: $KUBERNETES_VERSION
-- Driver: $MINIKUBE_DRIVER
-- Memory: ${MINIKUBE_MEMORY}MB
-- CPUs: $MINIKUBE_CPUS
+- Version: ${minikube_version}
+- Kubernetes Version: ${kubernetes_version}
+- Driver: ${minikube_driver}
+- Memory: ${minikube_memory}MB
+- CPUs: ${minikube_cpus}
 
 Access Information:
-- SSH: ssh -i ${CLUSTER_NAME}-key.pem ubuntu@$PUBLIC_IP
+- SSH: ssh -i ${cluster_name}-key.pem ubuntu@$PUBLIC_IP
 - Kubernetes API: https://$PRIVATE_IP:8443
 
 Useful Commands:
@@ -292,7 +287,7 @@ Requires=docker.service
 Type=oneshot
 User=ubuntu
 Group=ubuntu
-ExecStart=/usr/local/bin/minikube start --driver=docker
+ExecStart=/usr/local/bin/minikube start --driver=${minikube_driver}
 RemainAfterExit=yes
 Environment=HOME=/home/ubuntu
 Environment=MINIKUBE_HOME=/home/ubuntu/.minikube
