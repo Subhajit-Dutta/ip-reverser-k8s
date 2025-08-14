@@ -15,17 +15,7 @@ terraform {
     }
   }
   
-  # S3 Backend Configuration
-  backend "s3" {
-    bucket         = "minikube-terraform-state-bucket"
-    key            = "minikube-clusters/terraform.tfstate"
-    region         = "us-west-2"
-    encrypt        = true
-    dynamodb_table = "terraform-state-locks"
-    
-    # Use cluster name in the state key for multiple environments
-    # This will be overridden in Jenkinsfile with -backend-config
-  }
+  # Backend configuration removed from here - it's in backend.tf instead
 }
 
 provider "aws" {
