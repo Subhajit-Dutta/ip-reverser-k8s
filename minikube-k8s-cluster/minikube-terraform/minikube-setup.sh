@@ -193,7 +193,7 @@ DOCKERTEST
     AVAILABLE_MEM=\$(free -m | grep Mem | awk '{print \$7}')
     CPU_CORES=\$(nproc)
     
-    echo "Total Memory: \${TOTAL_MEM}MB"
+    MINIKUBE_MEM=\$((\\TOTAL_MEM - 1024))
     echo "Available Memory: \${AVAILABLE_MEM}MB" 
     echo "CPU Cores: \${CPU_CORES}"
     echo "Requested Memory: ${minikube_memory}MB"
