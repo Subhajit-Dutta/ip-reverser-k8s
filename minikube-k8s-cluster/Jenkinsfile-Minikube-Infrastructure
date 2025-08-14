@@ -845,7 +845,7 @@ EOF
 • Workspace: ${env.WORKSPACE}
 • IAM Role: Used securely without credentials
 
-💰 Remember: This cluster costs approximately $0.04 USD per hour
+💰 Remember: This cluster costs approximately \$0.04 USD per hour
 🔥 Use DESTROY_CLUSTER=true when done to avoid charges
 """
                         }
