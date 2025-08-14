@@ -246,7 +246,7 @@ Minikube Configuration:
 - Version: $MINIKUBE_VERSION
 - Kubernetes Version: $KUBERNETES_VERSION
 - Driver: $MINIKUBE_DRIVER
-- Memory: ${MINIKUBE_MEMORY}MB
+- Memory: ${minikube_memory}MB
 - CPUs: $MINIKUBE_CPUS
 
 Access Information:
