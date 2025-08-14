@@ -325,4 +325,3 @@ echo "3. Test deployment: kubectl run test-pod --image=nginx"
 
 echo "Setup script completed successfully!"
 echo "Minikube is running and ready to accept connections."
-echo "Minikube is running and ready to accept connections."
