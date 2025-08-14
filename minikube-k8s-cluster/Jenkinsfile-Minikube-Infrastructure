@@ -1,14 +1,12 @@
 pipeline {
     agent {
-        label 'ec2-agent-1'  // Your Amazon Linux Jenkins agent
+        label 'ec2-agent-1'  // Your Amazon Linux Jenkins agent with IAM role
     }
     
     environment {
-        // AWS and Terraform configuration
-        AWS_CREDENTIALS_ID = 'aws-credentials'
-        AWS_REGION = 'us-west-2'
+        // Infrastructure configuration
         CLUSTER_NAME = 'minikube-demo'
-        TERRAFORM_VERSION = '1.6.0'
+        TERRAFORM_VERSION = '1.12.2'
         
         // Infrastructure action flags
         DEPLOY_CLUSTER = "${params.DEPLOY_CLUSTER ?: 'false'}"
@@ -18,7 +16,7 @@ pipeline {
         MINIKUBE_VERSION = "${params.MINIKUBE_VERSION ?: 'v1.32.0'}"
         KUBERNETES_VERSION = "${params.KUBERNETES_VERSION ?: 'v1.28.3'}"
         
-        // Amazon Linux specific paths
+        // Agent specific paths for Amazon Linux
         HOME = "/home/ec2-user"
         PATH = "/usr/local/bin:/usr/bin:/bin:$PATH"
     }
@@ -87,7 +85,7 @@ pipeline {
     }
     
     stages {
-        stage('Agent Info') {
+        stage('Agent Info & IAM Verification') {
             steps {
                 script {
                     echo "🖥️ Agent Information:"
@@ -95,12 +93,36 @@ pipeline {
                     sh '''
                         echo "Agent Node: ${NODE_NAME}"
                         echo "Workspace: ${WORKSPACE}"
-                        echo "OS Info: $(cat /etc/os-release | grep PRETTY_NAME)"
+                        echo "OS Info: $(cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2)"
                         echo "User: $(whoami)"
                         echo "Home: ${HOME}"
-                        echo "Path: ${PATH}"
                         echo "Working Directory: $(pwd)"
                         echo "Available Space: $(df -h . | tail -1 | awk '{print $4}')"
+                        echo ""
+                        echo "🔐 IAM Role Verification:"
+                        echo "========================"
+                        
+                        # Verify IAM role is attached and working
+                        if aws sts get-caller-identity; then
+                            echo ""
+                            echo "✅ IAM role is properly configured"
+                            ROLE_ARN=$(aws sts get-caller-identity --query Arn --output text)
+                            echo "Current role: $ROLE_ARN"
+                            
+                            # Test basic AWS permissions
+                            echo ""
+                            echo "🔍 Testing AWS permissions..."
+                            aws ec2 describe-regions --query 'Regions[0].RegionName' --output text > /dev/null && echo "✅ EC2 permissions: OK"
+                            aws ec2 describe-vpcs --region us-west-2 --query 'Vpcs[0].VpcId' --output text > /dev/null && echo "✅ VPC permissions: OK"
+                            
+                        else
+                            echo "❌ IAM role not configured or AWS CLI not working"
+                            echo "Please ensure:"
+                            echo "1. IAM role is attached to this EC2 instance"
+                            echo "2. Role has required permissions (EC2, VPC, IAM)"
+                            echo "3. AWS CLI is installed"
+                            exit 1
+                        fi
                     '''
                 }
             }
@@ -155,57 +177,157 @@ pipeline {
             steps {
                 echo '🔧 Verifying required tools on Amazon Linux agent...'
                 sh '''
+                    echo "Checking Amazon Linux version and package manager..."
+                    
+                    # Detect Amazon Linux version and package manager
+                    if [ -f /etc/os-release ]; then
+                        . /etc/os-release
+                        echo "OS: $PRETTY_NAME"
+                        echo "Version: $VERSION_ID"
+                        
+                        if [[ "$VERSION_ID" == "2023" ]]; then
+                            PACKAGE_MANAGER="dnf"
+                            echo "Using DNF package manager for Amazon Linux 2023"
+                        else
+                            PACKAGE_MANAGER="yum"
+                            echo "Using YUM package manager for Amazon Linux 2"
+                        fi
+                    else
+                        PACKAGE_MANAGER="yum"
+                        echo "Defaulting to YUM package manager"
+                    fi
+                    
+                    # Function to install with the correct package manager
+                    install_tool() {
+                        local tool=$1
+                        local package=$2
+                        
+                        if command -v $tool &> /dev/null; then
+                            echo "✅ $tool: Already installed"
+                            return 0
+                        fi
+                        
+                        echo "Installing $tool using $PACKAGE_MANAGER..."
+                        
+                        if [[ "$PACKAGE_MANAGER" == "dnf" ]]; then
+                            # Amazon Linux 2023 - use DNF
+                            if sudo dnf install -y --allowerasing $package; then
+                                echo "✅ $tool: Installed with DNF"
+                                return 0
+                            fi
+                        else
+                            # Amazon Linux 2 - use YUM with conflict resolution
+                            if sudo yum install -y $package; then
+                                echo "✅ $tool: Installed with YUM"
+                                return 0
+                            fi
+                            
+                            # Try with --allowerasing
+                            echo "Retrying with --allowerasing..."
+                            if sudo yum install -y --allowerasing $package; then
+                                echo "✅ $tool: Installed with --allowerasing"
+                                return 0
+                            fi
+                            
+                            # Try with --skip-broken
+                            echo "Retrying with --skip-broken..."
+                            if sudo yum install -y --skip-broken $package; then
+                                echo "✅ $tool: Installed with --skip-broken"
+                                return 0
+                            fi
+                        fi
+                        
+                        echo "⚠️ Could not install $tool with package manager"
+                        return 1
+                    }
+                    
+                    # Clean package cache
+                    if [[ "$PACKAGE_MANAGER" == "dnf" ]]; then
+                        sudo dnf clean all
+                    else
+                        sudo yum clean all
+                    fi
+                    
                     echo "Checking installed tools..."
                     
                     # Check Terraform
                     if command -v terraform &> /dev/null; then
-                        echo "✅ Terraform: $(terraform version | head -1)"
+                        CURRENT_TF_VERSION=$(terraform version | head -1 | grep -o 'v[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+')
+                        echo "✅ Terraform: $CURRENT_TF_VERSION"
+                        if [[ "$CURRENT_TF_VERSION" != "v${TERRAFORM_VERSION}" ]]; then
+                            echo "⚠️ Different version detected. Installing Terraform ${TERRAFORM_VERSION}..."
+                            cd /tmp
+                            wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                            unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                            sudo mv terraform /usr/local/bin/
+                            rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                            echo "✅ Terraform ${TERRAFORM_VERSION} installed"
+                        fi
                     else
-                        echo "❌ Terraform not found!"
-                        echo "Installing Terraform..."
+                        echo "❌ Terraform not found! Installing..."
                         cd /tmp
                         wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
                         unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip
                         sudo mv terraform /usr/local/bin/
                         rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-                        echo "✅ Terraform installed: $(terraform version | head -1)"
+                        echo "✅ Terraform ${TERRAFORM_VERSION} installed"
                     fi
                     
                     # Check AWS CLI
                     if command -v aws &> /dev/null; then
                         echo "✅ AWS CLI: $(aws --version)"
                     else
-                        echo "❌ AWS CLI not found!"
-                        echo "Installing AWS CLI..."
+                        echo "❌ AWS CLI not found! Installing..."
                         cd /tmp
                         curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
                         unzip -o awscliv2.zip
                         sudo ./aws/install --update
                         rm -rf aws awscliv2.zip
-                        echo "✅ AWS CLI installed: $(aws --version)"
+                        echo "✅ AWS CLI installed"
                     fi
                     
                     # Check kubectl
                     if command -v kubectl &> /dev/null; then
                         echo "✅ kubectl: $(kubectl version --client --short 2>/dev/null || echo 'kubectl installed')"
                     else
-                        echo "❌ kubectl not found!"
-                        echo "Installing kubectl..."
+                        echo "❌ kubectl not found! Installing..."
                         cd /tmp
                         curl -LO "https://dl.k8s.io/release/${KUBERNETES_VERSION}/bin/linux/amd64/kubectl"
                         chmod +x kubectl
                         sudo mv kubectl /usr/local/bin/
-                        echo "✅ kubectl installed: $(kubectl version --client --short 2>/dev/null || echo 'kubectl installed')"
+                        echo "✅ kubectl installed"
+                    fi
+                    
+                    # Install missing system tools with correct package manager
+                    echo "Checking system tools..."
+                    
+                    install_tool "jq" "jq"
+                    install_tool "unzip" "unzip"
+                    install_tool "wget" "wget"
+                    install_tool "curl" "curl"
+                    
+                    # Special handling for netcat on Amazon Linux 2023
+                    if [[ "$PACKAGE_MANAGER" == "dnf" ]]; then
+                        install_tool "nc" "nmap-ncat"
+                    else
+                        install_tool "nc" "nc"
                     fi
                     
                     # Check other tools
                     echo "✅ Git: $(git --version)"
                     echo "✅ Curl: $(curl --version | head -1)"
-                    echo "✅ Unzip: $(unzip -v | head -1 | awk '{print $2}')"
-                    echo "✅ JQ: $(jq --version)"
+                    
+                    # Check Java (not critical for this pipeline)
+                    if command -v java &> /dev/null; then
+                        echo "✅ Java: $(java -version 2>&1 | head -1)"
+                    else
+                        echo "ℹ️ Java not found (not required for this pipeline)"
+                    fi
                     
                     echo ""
-                    echo "🎯 All required tools are available!"
+                    echo "🎯 Dependency verification completed!"
+                    echo "Package Manager: $PACKAGE_MANAGER"
+                    echo "All required tools are available."
                 '''
             }
         }
@@ -270,39 +392,30 @@ EOF
                 expression { params.DEPLOY_CLUSTER == true }
             }
             steps {
-                echo '🚀 Deploying Minikube cluster...'
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: AWS_CREDENTIALS_ID,
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]
-                ]) {
-                    dir('minikube-terraform') {
-                        sh '''
-                            echo "🔄 Initializing Terraform..."
-                            terraform init
-                            
-                            echo "📋 Planning deployment..."
-                            terraform plan -out=tfplan
-                            
-                            echo "🚀 Applying deployment..."
-                            terraform apply -auto-approve tfplan
-                            
-                            echo "💾 Saving outputs..."
-                            terraform output -json > terraform-outputs.json
-                            
-                            echo "✅ Infrastructure deployment completed!"
-                            echo ""
-                            echo "📊 Deployment Summary:"
-                            echo "===================="
-                            echo "Instance ID: $(terraform output -raw instance_id)"
-                            echo "Public IP: $(terraform output -raw instance_public_ip)"
-                            echo "SSH Command: $(terraform output -raw ssh_command)"
-                            echo "Minikube Status: $(terraform output -raw minikube_status_command)"
-                        '''
-                    }
+                echo '🚀 Deploying Minikube cluster using IAM role...'
+                dir('minikube-terraform') {
+                    sh '''
+                        echo "🔄 Initializing Terraform..."
+                        terraform init
+                        
+                        echo "📋 Planning deployment..."
+                        terraform plan -out=tfplan
+                        
+                        echo "🚀 Applying deployment..."
+                        terraform apply -auto-approve tfplan
+                        
+                        echo "💾 Saving outputs..."
+                        terraform output -json > terraform-outputs.json
+                        
+                        echo "✅ Infrastructure deployment completed!"
+                        echo ""
+                        echo "📊 Deployment Summary:"
+                        echo "===================="
+                        echo "Instance ID: $(terraform output -raw instance_id)"
+                        echo "Public IP: $(terraform output -raw instance_public_ip)"
+                        echo "SSH Command: $(terraform output -raw ssh_command)"
+                        echo "Minikube Status: $(terraform output -raw minikube_status_command)"
+                    '''
                 }
             }
         }
@@ -313,57 +426,48 @@ EOF
             }
             steps {
                 echo '⏳ Waiting for Minikube cluster to be ready...'
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: AWS_CREDENTIALS_ID,
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]
-                ]) {
-                    dir('minikube-terraform') {
-                        sh '''
-                            # Get instance IP
-                            INSTANCE_IP=$(terraform output -raw instance_public_ip)
-                            echo "🔍 Checking instance readiness: $INSTANCE_IP"
-                            
-                            # Wait for SSH to be available
-                            echo "⏳ Waiting for SSH connection..."
-                            timeout 300 bash -c "until nc -z $INSTANCE_IP 22; do sleep 10; echo 'Still waiting for SSH...'; done"
-                            echo "✅ SSH is available"
-                            
-                            # Wait for Minikube setup to complete
-                            echo "⏳ Waiting for Minikube setup to complete..."
-                            timeout 900 bash -c "
-                                while true; do
-                                    if ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@$INSTANCE_IP 'minikube status' 2>/dev/null | grep -q 'Running'; then
-                                        echo '✅ Minikube is running'
-                                        break
-                                    fi
-                                    echo 'Still waiting for Minikube...'
-                                    sleep 30
-                                done
-                            "
-                            
-                            # Verify cluster is working
-                            echo "🔍 Verifying cluster functionality..."
-                            ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "
-                                echo '=== Cluster Status ==='
-                                minikube status
-                                echo ''
-                                echo '=== Nodes ==='
-                                kubectl get nodes -o wide
-                                echo ''
-                                echo '=== System Pods ==='
-                                kubectl get pods -n kube-system
-                                echo ''
-                                echo '=== Enabled Addons ==='
-                                minikube addons list | grep enabled
-                            "
-                            
-                            echo "🎉 Minikube cluster is ready!"
-                        '''
-                    }
+                dir('minikube-terraform') {
+                    sh '''
+                        # Get instance IP
+                        INSTANCE_IP=$(terraform output -raw instance_public_ip)
+                        echo "🔍 Checking instance readiness: $INSTANCE_IP"
+                        
+                        # Wait for SSH to be available
+                        echo "⏳ Waiting for SSH connection..."
+                        timeout 300 bash -c "until nc -z $INSTANCE_IP 22; do sleep 10; echo 'Still waiting for SSH...'; done"
+                        echo "✅ SSH is available"
+                        
+                        # Wait for Minikube setup to complete
+                        echo "⏳ Waiting for Minikube setup to complete..."
+                        timeout 900 bash -c "
+                            while true; do
+                                if ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@$INSTANCE_IP 'minikube status' 2>/dev/null | grep -q 'Running'; then
+                                    echo '✅ Minikube is running'
+                                    break
+                                fi
+                                echo 'Still waiting for Minikube...'
+                                sleep 30
+                            done
+                        "
+                        
+                        # Verify cluster is working
+                        echo "🔍 Verifying cluster functionality..."
+                        ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "
+                            echo '=== Cluster Status ==='
+                            minikube status
+                            echo ''
+                            echo '=== Nodes ==='
+                            kubectl get nodes -o wide
+                            echo ''
+                            echo '=== System Pods ==='
+                            kubectl get pods -n kube-system
+                            echo ''
+                            echo '=== Enabled Addons ==='
+                            minikube addons list | grep enabled
+                        "
+                        
+                        echo "🎉 Minikube cluster is ready!"
+                    '''
                 }
             }
         }
@@ -410,6 +514,7 @@ To access cluster:
 2. SSH to instance for direct access
 3. Use kubectl with the provided config
 
+IAM Role Used: $(aws sts get-caller-identity --query Arn --output text)
 Setup completed at: $(date)
 EOF
                         
@@ -483,33 +588,24 @@ EOF
                 expression { params.DESTROY_CLUSTER == true }
             }
             steps {
-                echo '🔥 Destroying Minikube cluster and infrastructure...'
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: AWS_CREDENTIALS_ID,
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]
-                ]) {
-                    dir('minikube-terraform') {
-                        sh '''
-                            echo "🔄 Initializing Terraform..."
-                            terraform init
-                            
-                            echo "📋 Planning destruction..."
-                            terraform plan -destroy
-                            
-                            echo "🔥 Destroying infrastructure..."
-                            terraform destroy -auto-approve
-                            
-                            echo "🧹 Cleaning up files..."
-                            rm -f terraform.tfvars tfplan terraform-outputs.json jenkins-kubeconfig.yaml cluster-access-info.txt
-                            
-                            echo "✅ Infrastructure destroyed successfully!"
-                            echo "💰 All AWS resources have been cleaned up"
-                        '''
-                    }
+                echo '🔥 Destroying Minikube cluster and infrastructure using IAM role...'
+                dir('minikube-terraform') {
+                    sh '''
+                        echo "🔄 Initializing Terraform..."
+                        terraform init
+                        
+                        echo "📋 Planning destruction..."
+                        terraform plan -destroy
+                        
+                        echo "🔥 Destroying infrastructure..."
+                        terraform destroy -auto-approve
+                        
+                        echo "🧹 Cleaning up files..."
+                        rm -f terraform.tfvars tfplan terraform-outputs.json jenkins-kubeconfig.yaml cluster-access-info.txt
+                        
+                        echo "✅ Infrastructure destroyed successfully!"
+                        echo "💰 All AWS resources have been cleaned up"
+                    '''
                 }
             }
         }
@@ -522,7 +618,7 @@ EOF
                 # Clean up any temporary files
                 rm -f minikube-terraform/temp-* || true
                 
-                # Don't remove the tools as they're installed system-wide on the agent
+                # Tools remain installed on agent for future builds
                 echo "Tools preserved on agent for future builds"
             '''
         }
@@ -549,6 +645,11 @@ EOF
 • SSH: ${outputs.ssh_command.value}
 • Kubeconfig: jenkins-kubeconfig.yaml (in workspace)
 
+🔐 Security:
+• IAM Role: Used for secure deployment
+• No hardcoded credentials
+• Follows AWS security best practices
+
 🎯 Next Steps:
 1. Download jenkins-kubeconfig.yaml from workspace
 2. SSH to instance and run: ./cluster-health-check.sh
@@ -562,6 +663,7 @@ EOF
 🖥️ Agent Information:
 • Deployed from: ${env.NODE_NAME}
 • Workspace: ${env.WORKSPACE}
+• IAM Role: Used securely without credentials
 
 💰 Remember: This cluster costs ~$0.04/hour
 🔥 Use DESTROY_CLUSTER=true when done to avoid charges
@@ -571,8 +673,9 @@ EOF
                         clusterInfo = """
 🎉 Minikube Cluster Deployment Successful!
 =========================================
-✅ Cluster deployed successfully
+✅ Cluster deployed successfully using IAM role
 📄 Check workspace for cluster-access-info.txt
+🔐 Deployed securely without hardcoded credentials
 💰 Remember to destroy when done to avoid charges
 """
                     }
@@ -593,6 +696,11 @@ EOF
 • Elastic IP released
 • All associated resources cleaned up
 
+🔐 Security:
+• Destruction performed using IAM role
+• No credentials exposed or stored
+• Secure cleanup process
+
 🖥️ Agent: ${env.NODE_NAME} ready for next deployment!
 💡 Tools remain installed for future builds
 """
@@ -608,9 +716,15 @@ EOF
 
 🔍 Common Issues and Solutions:
 
+IAM Role Issues:
+• Verify IAM role is attached to Jenkins agent EC2 instance
+• Check role has required permissions (EC2, VPC, IAM)
+• Test: aws sts get-caller-identity
+• Ensure role can pass roles to other EC2 instances
+
 Infrastructure Issues:
-• Check AWS credentials are valid and have permissions
 • Verify selected region has capacity for instance type
+• Check if VPC limits have been reached
 • Ensure Terraform state is not locked
 
 Agent-Specific Issues:
@@ -619,7 +733,7 @@ Agent-Specific Issues:
 • Verify agent can reach AWS APIs
 
 Amazon Linux Specific:
-• Check if yum packages are up to date
+• Check if dnf/yum packages are up to date
 • Verify Docker is running: sudo systemctl status docker
 • Check file permissions in ${env.HOME}
 
@@ -630,12 +744,13 @@ Network Issues:
 
 Next Steps:
 1. Check console output for specific error messages
-2. SSH to agent and run: setup-jenkins-agent-amazon-linux.sh
-3. Verify AWS credentials: aws sts get-caller-identity
+2. Verify IAM role permissions and attachment
+3. Test AWS CLI: aws ec2 describe-instances --region us-west-2
 4. Check available space: df -h
 
 💡 For quick cleanup: Run with DESTROY_CLUSTER=true
 🔧 Agent troubleshooting: Check ${env.WORKSPACE} directory
+🔐 IAM troubleshooting: Verify role attachment and permissions
 """
                 echo troubleshooting
             }
