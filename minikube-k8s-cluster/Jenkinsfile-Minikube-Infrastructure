@@ -4,7 +4,7 @@ pipeline {
     }
     
     environment {
-        CLUSTER_NAME = "minikube-demo-${BUILD_NUMBER}"
+        CLUSTER_NAME = "${params.CLUSTER_NAME ?: 'minikube-demo'}"
         TERRAFORM_VERSION = '1.12.2'
         DEPLOY_CLUSTER = "${params.DEPLOY_CLUSTER ?: 'false'}"
         DESTROY_CLUSTER = "${params.DESTROY_CLUSTER ?: 'false'}"
@@ -58,7 +58,7 @@ pipeline {
         string(
             name: 'CLUSTER_NAME',
             defaultValue: 'minikube-demo',
-            description: 'Name for the Minikube cluster'
+            description: 'Name for the Minikube cluster (will be used for all AWS resources)'
         )
         booleanParam(
             name: 'ENABLE_DASHBOARD',
@@ -372,7 +372,7 @@ EOF
                             echo "⚠️ Found leftover IAM role $ROLE_NAME, cleaning up..."
                             
                             # Delete policy first
-                            aws iam delete-role-policy --role-name $ROLE_NAME --policy-name $POLICY_NAME 2>/dev/null || echo "Policy already deleted"
+                            aws iam delete-role-policy --role-name $ROLE_NAME --policy-name $POLICY_NAME 2>/dev/null || echo "Policy already deleted or not found"
                             
                             # Remove role from instance profile
                             aws iam remove-role-from-instance-profile --instance-profile-name $PROFILE_NAME --role-name $ROLE_NAME 2>/dev/null || echo "Role already removed from profile"
@@ -711,6 +711,23 @@ EOF
                         rm -rf .terraform* || true
                         terraform init -backend-config=backend-config.hcl
                         
+                        echo "🔍 Checking if state file exists in S3..."
+                        if aws s3 ls s3://minikube-terraform-state-bucket/minikube-clusters/${CLUSTER_NAME}/terraform.tfstate; then
+                            echo "✅ State file found for cluster: ${CLUSTER_NAME}"
+                            
+                            else
+                            echo "⚠️  No state file found for cluster: ${CLUSTER_NAME}"
+                            echo "📋 Available clusters in S3:"
+                            aws s3 ls s3://minikube-terraform-state-bucket/minikube-clusters/ --recursive || echo "No state files found"
+                            echo ""
+                            echo "❌ Cannot destroy - no Terraform state found for this cluster"
+                            echo "💡 Either:"
+                            echo "   1. Cluster was already destroyed"
+                            echo "   2. Cluster name is incorrect"
+                            echo "   3. Cluster was created before S3 backend was configured"
+                            exit 1
+                        fi
+                        
                         echo "📋 Planning destruction..."
                         terraform plan -destroy -out=destroy-plan
                         
@@ -860,6 +877,7 @@ EOF
 • SSH: ssh -i cluster-ssh-key.pem ubuntu@${outputs.instance_public_ip.value}
 • Kubeconfig: jenkins-kubeconfig.yaml (in workspace)
 • Private Key: cluster-ssh-key.pem (in workspace)
+• S3 State: s3://minikube-terraform-state-bucket/minikube-clusters/${params.CLUSTER_NAME}/terraform.tfstate
 
 🔐 Security:
 • IAM Role: Used for secure deployment
@@ -886,6 +904,11 @@ EOF
 
 💰 Remember: This cluster costs approximately \$0.04 USD per hour
 🔥 Use DESTROY_CLUSTER=true when done to avoid charges
+
+🗂️ State Management:
+• Terraform state stored in S3 for persistence
+• State path: minikube-clusters/${params.CLUSTER_NAME}/terraform.tfstate
+• DynamoDB locking prevents concurrent modifications
 """
                         }
                     } catch (Exception e) {
@@ -904,6 +927,10 @@ EOF
 • Cluster Name: ${params.CLUSTER_NAME}
 • Region: ${params.AWS_REGION}
 • Destruction completed at: ${new Date()}
+
+🗂️ State Management:
+• S3 state file removed: minikube-clusters/${params.CLUSTER_NAME}/terraform.tfstate
+• DynamoDB locks released
 
 🔐 Security:
 • Used IAM role for secure destruction
