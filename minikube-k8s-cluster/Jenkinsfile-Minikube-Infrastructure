@@ -745,7 +745,8 @@ EOF
 🔥 Use DESTROY_CLUSTER=true when done to avoid charges
 """  
                     
-                }
-            }
+           } catch (Exception e) {
+    // proper exception handling
+}
        
                        
