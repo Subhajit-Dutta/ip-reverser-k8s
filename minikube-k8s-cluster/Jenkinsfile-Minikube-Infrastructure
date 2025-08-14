@@ -313,7 +313,7 @@ pipeline {
             }
             steps {
                 echo '🏗️ Preparing infrastructure configuration...'
-                dir('minikube-terraform') {
+                dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
                         if [ ! -f ${HOME}/.ssh/id_rsa ]; then
                             echo "Generating SSH key pair..."
@@ -362,7 +362,7 @@ EOF
             }
             steps {
                 echo '🚀 Deploying Minikube cluster using IAM role...'
-                dir('minikube-terraform') {
+                dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
                         echo "🔄 Initializing Terraform..."
                         terraform init
@@ -370,6 +370,58 @@ EOF
                         echo "📋 Planning deployment..."
                         terraform plan -out=tfplan
                         
+                        echo "💾 Saving plan output for review..."
+                        terraform show tfplan > terraform-plan-output.txt
+                        
+                        echo ""
+                        echo "📋 TERRAFORM PLAN SUMMARY:"
+                        echo "=========================="
+                        terraform show -no-color tfplan | head -50
+                        echo ""
+                        echo "📄 Full plan saved to: terraform-plan-output.txt"
+                        echo "⏳ Waiting for manual approval to proceed with deployment..."
+                    '''
+                    
+                    script {
+                        // Show plan summary in Jenkins
+                        def planOutput = readFile('terraform-plan-output.txt')
+                        def planSummary = planOutput.split('\n')[0..30].join('\n')
+                        
+                        echo "📋 Terraform Plan Summary (First 30 lines):"
+                        echo planSummary
+                        
+                        // Manual approval step
+                        try {
+                            timeout(time: 10, unit: 'MINUTES') {
+                                def userInput = input(
+                                    id: 'terraform-deploy-approval',
+                                    message: 'Review the Terraform plan above and decide:',
+                                    parameters: [
+                                        choice(
+                                            name: 'ACTION',
+                                            choices: [
+                                                'APPROVE - Deploy the infrastructure',
+                                                'REJECT - Cancel the deployment'
+                                            ],
+                                            description: 'Choose your action after reviewing the Terraform plan'
+                                        )
+                                    ],
+                                    submitterParameter: 'APPROVER'
+                                )
+                                
+                                if (userInput.ACTION.startsWith('APPROVE')) {
+                                    echo "✅ Deployment approved by: ${userInput.APPROVER}"
+                                    echo "🚀 Proceeding with Terraform apply..."
+                                } else {
+                                    error("❌ Deployment rejected by: ${userInput.APPROVER}")
+                                }
+                            }
+                        } catch (Exception e) {
+                            error("❌ Approval timeout or cancelled. Deployment aborted.")
+                        }
+                    }
+                    
+                    sh '''
                         echo "🚀 Applying deployment..."
                         terraform apply -auto-approve tfplan
                         
@@ -395,7 +447,7 @@ EOF
             }
             steps {
                 echo '⏳ Waiting for Minikube cluster to be ready...'
-                dir('minikube-terraform') {
+                dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
                         INSTANCE_IP=$(terraform output -raw instance_public_ip)
                         echo "🔍 Checking instance readiness: $INSTANCE_IP"
@@ -443,7 +495,7 @@ EOF
             }
             steps {
                 echo '🔧 Configuring Jenkins access to cluster...'
-                dir('minikube-terraform') {
+                dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
                         INSTANCE_IP=$(terraform output -raw instance_public_ip)
                         
@@ -491,7 +543,7 @@ EOF
             }
             steps {
                 echo '🏥 Performing cluster health check...'
-                dir('minikube-terraform') {
+                dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
                         INSTANCE_IP=$(terraform output -raw instance_public_ip)
                         
@@ -548,19 +600,78 @@ EOF
             }
             steps {
                 echo '🔥 Destroying Minikube cluster and infrastructure using IAM role...'
-                dir('minikube-terraform') {
+                dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
                         echo "🔄 Initializing Terraform..."
                         terraform init
                         
                         echo "📋 Planning destruction..."
-                        terraform plan -destroy
+                        terraform plan -destroy -out=destroy-plan
                         
+                        echo "💾 Saving destroy plan for review..."
+                        terraform show destroy-plan > terraform-destroy-plan.txt
+                        
+                        echo ""
+                        echo "🔥 TERRAFORM DESTROY PLAN:"
+                        echo "========================="
+                        terraform show -no-color destroy-plan | head -30
+                        echo ""
+                        echo "📄 Full destroy plan saved to: terraform-destroy-plan.txt"
+                        echo "⏳ Waiting for manual approval to proceed with destruction..."
+                    '''
+                    
+                    script {
+                        // Show destroy plan summary
+                        def destroyPlan = readFile('terraform-destroy-plan.txt')
+                        def destroySummary = destroyPlan.split('\n')[0..20].join('\n')
+                        
+                        echo "🔥 Terraform Destroy Plan Summary:"
+                        echo destroySummary
+                        
+                        // Manual approval for destruction
+                        try {
+                            timeout(time: 5, unit: 'MINUTES') {
+                                def userInput = input(
+                                    id: 'terraform-destroy-approval',
+                                    message: 'DANGER: This will destroy all infrastructure! Review the plan above:',
+                                    parameters: [
+                                        choice(
+                                            name: 'ACTION',
+                                            choices: [
+                                                'APPROVE - Destroy the infrastructure',
+                                                'REJECT - Cancel the destruction'
+                                            ],
+                                            description: 'Choose your action after reviewing the destroy plan'
+                                        ),
+                                        string(
+                                            name: 'CONFIRMATION',
+                                            defaultValue: '',
+                                            description: 'Type "DESTROY" to confirm you want to destroy all infrastructure'
+                                        )
+                                    ],
+                                    submitterParameter: 'APPROVER'
+                                )
+                                
+                                if (userInput.ACTION.startsWith('APPROVE') && userInput.CONFIRMATION == 'DESTROY') {
+                                    echo "✅ Destruction approved by: ${userInput.APPROVER}"
+                                    echo "🔥 Proceeding with infrastructure destruction..."
+                                } else if (userInput.ACTION.startsWith('APPROVE')) {
+                                    error("❌ Destruction cancelled: Confirmation text 'DESTROY' not provided")
+                                } else {
+                                    error("❌ Destruction rejected by: ${userInput.APPROVER}")
+                                }
+                            }
+                        } catch (Exception e) {
+                            error("❌ Destroy approval timeout or cancelled. Destruction aborted.")
+                        }
+                    }
+                    
+                    sh '''
                         echo "🔥 Destroying infrastructure..."
-                        terraform destroy -auto-approve
+                        terraform apply -auto-approve destroy-plan
                         
                         echo "🧹 Cleaning up files..."
-                        rm -f terraform.tfvars tfplan terraform-outputs.json jenkins-kubeconfig.yaml cluster-access-info.txt
+                        rm -f terraform.tfvars tfplan destroy-plan terraform-outputs.json terraform-plan-output.txt terraform-destroy-plan.txt jenkins-kubeconfig.yaml cluster-access-info.txt
                         
                         echo "✅ Infrastructure destroyed successfully!"
                         echo "💰 All AWS resources have been cleaned up"
@@ -574,7 +685,9 @@ EOF
         always {
             echo '🧹 Cleaning up workspace...'
             sh '''
-                rm -f minikube-terraform/temp-* || true
+                rm -f minikube-k8s-cluster/minikube-terraform/temp-* || true
+                rm -f minikube-k8s-cluster/minikube-terraform/terraform-plan-output.txt || true
+                rm -f minikube-k8s-cluster/minikube-terraform/terraform-destroy-plan.txt || true
                 echo "Tools preserved on agent for future builds"
             '''
         }
@@ -583,7 +696,7 @@ EOF
             script {
                 if (params.DEPLOY_CLUSTER) {
                     try {
-                        dir('minikube-terraform') {
+                        dir('minikube-k8s-cluster/minikube-terraform') {
                             def outputs = readJSON file: 'terraform-outputs.json'
                             echo """
 🎉 Minikube Cluster Deployment Successful!
