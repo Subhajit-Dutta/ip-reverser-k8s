@@ -349,6 +349,19 @@ pipeline {
                         rm -f cluster-*.pem || true
                         rm -f cluster-access-info.txt || true
                         
+                        echo "🗂️ Setting up S3 backend configuration..."
+                        # Create backend configuration file for this specific cluster
+                        cat <<EOF > backend-config.hcl
+bucket = "minikube-terraform-state-bucket"
+key    = "minikube-clusters/${CLUSTER_NAME}/terraform.tfstate"
+region = "${AWS_REGION}"
+encrypt = true
+dynamodb_table = "terraform-state-locks"
+EOF
+                        
+                        echo "📄 Backend configuration created:"
+                        cat backend-config.hcl
+                        
                         echo "🧹 Checking for leftover IAM resources..."
                         ROLE_NAME="${CLUSTER_NAME}-ec2-role"
                         PROFILE_NAME="${CLUSTER_NAME}-ec2-profile" 
@@ -438,9 +451,9 @@ EOF
                 echo '🚀 Deploying Minikube cluster using IAM role...'
                 dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
-                        echo "📄 Initializing Terraform (clean state)..."
+                        echo "📄 Initializing Terraform with S3 backend..."
                         rm -rf .terraform* || true
-                        terraform init
+                        terraform init -backend-config=backend-config.hcl
                         
                         echo "📋 Planning deployment..."
                         terraform plan -out=tfplan
@@ -694,9 +707,9 @@ EOF
                 echo '🔥 Destroying Minikube cluster and infrastructure using IAM role...'
                 dir('minikube-k8s-cluster/minikube-terraform') {
                     sh '''
-                        echo "📄 Initializing Terraform (clean state)..."
+                        echo "📄 Initializing Terraform with S3 backend..."
                         rm -rf .terraform* || true
-                        terraform init
+                        terraform init -backend-config=backend-config.hcl
                         
                         echo "📋 Planning destruction..."
                         terraform plan -destroy -out=destroy-plan
