@@ -1,0 +1,649 @@
+pipeline {
+    agent {
+        label 'ec2-agent-1'  // Your Amazon Linux Jenkins agent
+    }
+    
+    environment {
+        // AWS and Terraform configuration
+        AWS_CREDENTIALS_ID = 'aws-credentials'
+        AWS_REGION = 'us-west-2'
+        CLUSTER_NAME = 'minikube-demo'
+        TERRAFORM_VERSION = '1.6.0'
+        
+        // Infrastructure action flags
+        DEPLOY_CLUSTER = "${params.DEPLOY_CLUSTER ?: 'false'}"
+        DESTROY_CLUSTER = "${params.DESTROY_CLUSTER ?: 'false'}"
+        
+        // Minikube specific configuration
+        MINIKUBE_VERSION = "${params.MINIKUBE_VERSION ?: 'v1.32.0'}"
+        KUBERNETES_VERSION = "${params.KUBERNETES_VERSION ?: 'v1.28.3'}"
+        
+        // Amazon Linux specific paths
+        HOME = "/home/ec2-user"
+        PATH = "/usr/local/bin:/usr/bin:/bin:$PATH"
+    }
+    
+    parameters {
+        booleanParam(
+            name: 'DEPLOY_CLUSTER',
+            defaultValue: false,
+            description: 'Deploy new Minikube cluster on AWS EC2'
+        )
+        booleanParam(
+            name: 'DESTROY_CLUSTER',
+            defaultValue: false,
+            description: 'Destroy existing Minikube cluster and infrastructure'
+        )
+        choice(
+            name: 'INSTANCE_TYPE',
+            choices: ['t3.medium', 't3.large', 't3.xlarge', 't2.medium', 't2.large', 'm5.large'],
+            description: 'EC2 instance type (minimum t3.medium for Minikube)'
+        )
+        choice(
+            name: 'AWS_REGION',
+            choices: ['us-west-2', 'us-east-1', 'eu-west-1', 'ap-south-1'],
+            description: 'AWS region for deployment'
+        )
+        string(
+            name: 'MINIKUBE_VERSION',
+            defaultValue: 'v1.32.0',
+            description: 'Minikube version to install'
+        )
+        string(
+            name: 'KUBERNETES_VERSION',
+            defaultValue: 'v1.28.3',
+            description: 'Kubernetes version for Minikube cluster'
+        )
+        choice(
+            name: 'MINIKUBE_MEMORY',
+            choices: ['3900', '4096', '6144', '8192'],
+            description: 'Memory allocation for Minikube (MB)'
+        )
+        choice(
+            name: 'MINIKUBE_CPUS',
+            choices: ['2', '3', '4'],
+            description: 'CPU allocation for Minikube'
+        )
+        string(
+            name: 'CLUSTER_NAME',
+            defaultValue: 'minikube-demo',
+            description: 'Name for the Minikube cluster'
+        )
+        booleanParam(
+            name: 'ENABLE_DASHBOARD',
+            defaultValue: true,
+            description: 'Enable Kubernetes Dashboard'
+        )
+        booleanParam(
+            name: 'ENABLE_INGRESS',
+            defaultValue: true,
+            description: 'Enable Ingress Controller'
+        )
+        booleanParam(
+            name: 'ENABLE_REGISTRY',
+            defaultValue: true,
+            description: 'Enable Local Registry'
+        )
+    }
+    
+    stages {
+        stage('Agent Info') {
+            steps {
+                script {
+                    echo "🖥️ Agent Information:"
+                    echo "==================="
+                    sh '''
+                        echo "Agent Node: ${NODE_NAME}"
+                        echo "Workspace: ${WORKSPACE}"
+                        echo "OS Info: $(cat /etc/os-release | grep PRETTY_NAME)"
+                        echo "User: $(whoami)"
+                        echo "Home: ${HOME}"
+                        echo "Path: ${PATH}"
+                        echo "Working Directory: $(pwd)"
+                        echo "Available Space: $(df -h . | tail -1 | awk '{print $4}')"
+                    '''
+                }
+            }
+        }
+        
+        stage('Validation') {
+            steps {
+                script {
+                    echo "🔍 Validating pipeline parameters..."
+                    
+                    // Validate mutually exclusive actions
+                    if (params.DEPLOY_CLUSTER && params.DESTROY_CLUSTER) {
+                        error("❌ Cannot deploy and destroy cluster in the same run. Choose one action.")
+                    }
+                    
+                    if (!params.DEPLOY_CLUSTER && !params.DESTROY_CLUSTER) {
+                        error("❌ No action specified. Please select either DEPLOY_CLUSTER or DESTROY_CLUSTER.")
+                    }
+                    
+                    // Validate instance type for Minikube
+                    def validInstances = ['t3.medium', 't3.large', 't3.xlarge', 't2.medium', 't2.large', 'm5.large']
+                    if (!validInstances.contains(params.INSTANCE_TYPE)) {
+                        error("❌ Invalid instance type. Minikube requires at least t3.medium.")
+                    }
+                    
+                    // Update environment variables from parameters
+                    env.AWS_REGION = params.AWS_REGION
+                    env.CLUSTER_NAME = params.CLUSTER_NAME
+                    env.MINIKUBE_VERSION = params.MINIKUBE_VERSION
+                    env.KUBERNETES_VERSION = params.KUBERNETES_VERSION
+                    
+                    echo "✅ Validation completed"
+                    echo "📋 Configuration:"
+                    echo "   - Action: ${params.DEPLOY_CLUSTER ? 'DEPLOY' : 'DESTROY'}"
+                    echo "   - Cluster Name: ${params.CLUSTER_NAME}"
+                    echo "   - Region: ${params.AWS_REGION}"
+                    echo "   - Instance Type: ${params.INSTANCE_TYPE}"
+                    echo "   - Minikube Version: ${params.MINIKUBE_VERSION}"
+                    echo "   - Kubernetes Version: ${params.KUBERNETES_VERSION}"
+                }
+            }
+        }
+        
+        stage('Checkout') {
+            steps {
+                echo '📥 Checking out source code...'
+                checkout scm
+            }
+        }
+        
+        stage('Verify Dependencies') {
+            steps {
+                echo '🔧 Verifying required tools on Amazon Linux agent...'
+                sh '''
+                    echo "Checking installed tools..."
+                    
+                    # Check Terraform
+                    if command -v terraform &> /dev/null; then
+                        echo "✅ Terraform: $(terraform version | head -1)"
+                    else
+                        echo "❌ Terraform not found!"
+                        echo "Installing Terraform..."
+                        cd /tmp
+                        wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                        unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                        sudo mv terraform /usr/local/bin/
+                        rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                        echo "✅ Terraform installed: $(terraform version | head -1)"
+                    fi
+                    
+                    # Check AWS CLI
+                    if command -v aws &> /dev/null; then
+                        echo "✅ AWS CLI: $(aws --version)"
+                    else
+                        echo "❌ AWS CLI not found!"
+                        echo "Installing AWS CLI..."
+                        cd /tmp
+                        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                        unzip -o awscliv2.zip
+                        sudo ./aws/install --update
+                        rm -rf aws awscliv2.zip
+                        echo "✅ AWS CLI installed: $(aws --version)"
+                    fi
+                    
+                    # Check kubectl
+                    if command -v kubectl &> /dev/null; then
+                        echo "✅ kubectl: $(kubectl version --client --short 2>/dev/null || echo 'kubectl installed')"
+                    else
+                        echo "❌ kubectl not found!"
+                        echo "Installing kubectl..."
+                        cd /tmp
+                        curl -LO "https://dl.k8s.io/release/${KUBERNETES_VERSION}/bin/linux/amd64/kubectl"
+                        chmod +x kubectl
+                        sudo mv kubectl /usr/local/bin/
+                        echo "✅ kubectl installed: $(kubectl version --client --short 2>/dev/null || echo 'kubectl installed')"
+                    fi
+                    
+                    # Check other tools
+                    echo "✅ Git: $(git --version)"
+                    echo "✅ Curl: $(curl --version | head -1)"
+                    echo "✅ Unzip: $(unzip -v | head -1 | awk '{print $2}')"
+                    echo "✅ JQ: $(jq --version)"
+                    
+                    echo ""
+                    echo "🎯 All required tools are available!"
+                '''
+            }
+        }
+        
+        stage('Prepare Infrastructure') {
+            when {
+                anyOf {
+                    expression { params.DEPLOY_CLUSTER == true }
+                    expression { params.DESTROY_CLUSTER == true }
+                }
+            }
+            steps {
+                echo '🏗️ Preparing infrastructure configuration...'
+                dir('minikube-terraform') {
+                    sh '''
+                        # Generate SSH key pair if not exists
+                        if [ ! -f ${HOME}/.ssh/id_rsa ]; then
+                            echo "Generating SSH key pair..."
+                            ssh-keygen -t rsa -b 4096 -f ${HOME}/.ssh/id_rsa -N ""
+                        fi
+                        
+                        # Create terraform.tfvars from parameters
+                        cat <<EOF > terraform.tfvars
+aws_region = "${AWS_REGION}"
+cluster_name = "${CLUSTER_NAME}"
+environment = "demo"
+instance_type = "${INSTANCE_TYPE}"
+public_key = "$(cat ${HOME}/.ssh/id_rsa.pub)"
+allowed_cidr_blocks = ["0.0.0.0/0"]
+use_elastic_ip = true
+minikube_version = "${MINIKUBE_VERSION}"
+kubernetes_version = "${KUBERNETES_VERSION}"
+minikube_driver = "docker"
+minikube_memory = "${MINIKUBE_MEMORY}"
+minikube_cpus = "${MINIKUBE_CPUS}"
+enable_addons = [
+EOF
+                        
+                        # Add enabled addons based on parameters
+                        if [ "${ENABLE_DASHBOARD}" = "true" ]; then
+                            echo '  "dashboard",' >> terraform.tfvars
+                        fi
+                        if [ "${ENABLE_INGRESS}" = "true" ]; then
+                            echo '  "ingress",' >> terraform.tfvars
+                        fi
+                        if [ "${ENABLE_REGISTRY}" = "true" ]; then
+                            echo '  "registry",' >> terraform.tfvars
+                        fi
+                        echo '  "metrics-server"' >> terraform.tfvars
+                        echo ']' >> terraform.tfvars
+                        
+                        echo "✅ Terraform configuration prepared"
+                        echo "📄 terraform.tfvars content:"
+                        cat terraform.tfvars
+                    '''
+                }
+            }
+        }
+        
+        stage('Deploy Minikube Cluster') {
+            when {
+                expression { params.DEPLOY_CLUSTER == true }
+            }
+            steps {
+                echo '🚀 Deploying Minikube cluster...'
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: AWS_CREDENTIALS_ID,
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]
+                ]) {
+                    dir('minikube-terraform') {
+                        sh '''
+                            echo "🔄 Initializing Terraform..."
+                            terraform init
+                            
+                            echo "📋 Planning deployment..."
+                            terraform plan -out=tfplan
+                            
+                            echo "🚀 Applying deployment..."
+                            terraform apply -auto-approve tfplan
+                            
+                            echo "💾 Saving outputs..."
+                            terraform output -json > terraform-outputs.json
+                            
+                            echo "✅ Infrastructure deployment completed!"
+                            echo ""
+                            echo "📊 Deployment Summary:"
+                            echo "===================="
+                            echo "Instance ID: $(terraform output -raw instance_id)"
+                            echo "Public IP: $(terraform output -raw instance_public_ip)"
+                            echo "SSH Command: $(terraform output -raw ssh_command)"
+                            echo "Minikube Status: $(terraform output -raw minikube_status_command)"
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Wait for Cluster Readiness') {
+            when {
+                expression { params.DEPLOY_CLUSTER == true }
+            }
+            steps {
+                echo '⏳ Waiting for Minikube cluster to be ready...'
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: AWS_CREDENTIALS_ID,
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]
+                ]) {
+                    dir('minikube-terraform') {
+                        sh '''
+                            # Get instance IP
+                            INSTANCE_IP=$(terraform output -raw instance_public_ip)
+                            echo "🔍 Checking instance readiness: $INSTANCE_IP"
+                            
+                            # Wait for SSH to be available
+                            echo "⏳ Waiting for SSH connection..."
+                            timeout 300 bash -c "until nc -z $INSTANCE_IP 22; do sleep 10; echo 'Still waiting for SSH...'; done"
+                            echo "✅ SSH is available"
+                            
+                            # Wait for Minikube setup to complete
+                            echo "⏳ Waiting for Minikube setup to complete..."
+                            timeout 900 bash -c "
+                                while true; do
+                                    if ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@$INSTANCE_IP 'minikube status' 2>/dev/null | grep -q 'Running'; then
+                                        echo '✅ Minikube is running'
+                                        break
+                                    fi
+                                    echo 'Still waiting for Minikube...'
+                                    sleep 30
+                                done
+                            "
+                            
+                            # Verify cluster is working
+                            echo "🔍 Verifying cluster functionality..."
+                            ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "
+                                echo '=== Cluster Status ==='
+                                minikube status
+                                echo ''
+                                echo '=== Nodes ==='
+                                kubectl get nodes -o wide
+                                echo ''
+                                echo '=== System Pods ==='
+                                kubectl get pods -n kube-system
+                                echo ''
+                                echo '=== Enabled Addons ==='
+                                minikube addons list | grep enabled
+                            "
+                            
+                            echo "🎉 Minikube cluster is ready!"
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Configure Jenkins Access') {
+            when {
+                expression { params.DEPLOY_CLUSTER == true }
+            }
+            steps {
+                echo '🔧 Configuring Jenkins access to cluster...'
+                dir('minikube-terraform') {
+                    sh '''
+                        # Get instance IP
+                        INSTANCE_IP=$(terraform output -raw instance_public_ip)
+                        
+                        # Download kubeconfig from instance
+                        echo "📥 Downloading kubeconfig from instance..."
+                        ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "
+                            # Ensure jenkins kubeconfig exists
+                            if [ ! -f jenkins-kubeconfig.yaml ]; then
+                                echo 'Creating Jenkins kubeconfig...'
+                                cat ~/.kube/config > jenkins-kubeconfig.yaml
+                            fi
+                            cat jenkins-kubeconfig.yaml
+                        " > jenkins-kubeconfig.yaml
+                        
+                        echo "✅ Kubeconfig downloaded"
+                        echo "📊 Kubeconfig size: $(wc -l < jenkins-kubeconfig.yaml) lines"
+                        
+                        # Store cluster information
+                        cat <<EOF > cluster-access-info.txt
+Minikube Cluster Access Information
+==================================
+
+Cluster Name: ${CLUSTER_NAME}
+Public IP: $INSTANCE_IP
+SSH Command: $(terraform output -raw ssh_command)
+
+Kubeconfig Location: jenkins-kubeconfig.yaml
+Dashboard Command: minikube dashboard --url
+
+To access cluster:
+1. Upload jenkins-kubeconfig.yaml to Jenkins credentials
+2. SSH to instance for direct access
+3. Use kubectl with the provided config
+
+Setup completed at: $(date)
+EOF
+                        
+                        echo "📄 Cluster access information saved"
+                    '''
+                }
+            }
+        }
+        
+        stage('Cluster Health Check') {
+            when {
+                expression { params.DEPLOY_CLUSTER == true }
+            }
+            steps {
+                echo '🏥 Performing cluster health check...'
+                dir('minikube-terraform') {
+                    sh '''
+                        # Get instance IP
+                        INSTANCE_IP=$(terraform output -raw instance_public_ip)
+                        
+                        # Run comprehensive health check
+                        ssh -i ${HOME}/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "
+                            echo '🏥 Comprehensive Cluster Health Check'
+                            echo '====================================='
+                            echo ''
+                            
+                            echo '📊 Minikube Status:'
+                            minikube status
+                            echo ''
+                            
+                            echo '🖥️ Node Information:'
+                            kubectl get nodes -o wide
+                            echo ''
+                            
+                            echo '📦 System Pods Status:'
+                            kubectl get pods -n kube-system --no-headers | awk '{print \$1, \$3}' | column -t
+                            echo ''
+                            
+                            echo '🔧 Enabled Addons:'
+                            minikube addons list | grep enabled
+                            echo ''
+                            
+                            echo '🌐 Services:'
+                            kubectl get svc --all-namespaces
+                            echo ''
+                            
+                            echo '💾 Storage Classes:'
+                            kubectl get storageclass
+                            echo ''
+                            
+                            echo '🔒 RBAC Check:'
+                            kubectl get clusterrolebinding jenkins-deployer || echo 'Jenkins RBAC not found'
+                            echo ''
+                            
+                            echo '🎯 Test Pod Deployment:'
+                            kubectl run test-nginx --image=nginx:latest --port=80 --dry-run=client -o yaml | kubectl apply -f -
+                            sleep 5
+                            kubectl get pod test-nginx
+                            kubectl delete pod test-nginx --force --grace-period=0
+                            echo ''
+                            
+                            echo '✅ Health check completed successfully!'
+                        "
+                    '''
+                }
+            }
+        }
+        
+        stage('Destroy Cluster') {
+            when {
+                expression { params.DESTROY_CLUSTER == true }
+            }
+            steps {
+                echo '🔥 Destroying Minikube cluster and infrastructure...'
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: AWS_CREDENTIALS_ID,
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]
+                ]) {
+                    dir('minikube-terraform') {
+                        sh '''
+                            echo "🔄 Initializing Terraform..."
+                            terraform init
+                            
+                            echo "📋 Planning destruction..."
+                            terraform plan -destroy
+                            
+                            echo "🔥 Destroying infrastructure..."
+                            terraform destroy -auto-approve
+                            
+                            echo "🧹 Cleaning up files..."
+                            rm -f terraform.tfvars tfplan terraform-outputs.json jenkins-kubeconfig.yaml cluster-access-info.txt
+                            
+                            echo "✅ Infrastructure destroyed successfully!"
+                            echo "💰 All AWS resources have been cleaned up"
+                        '''
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo '🧹 Cleaning up workspace...'
+            sh '''
+                # Clean up any temporary files
+                rm -f minikube-terraform/temp-* || true
+                
+                # Don't remove the tools as they're installed system-wide on the agent
+                echo "Tools preserved on agent for future builds"
+            '''
+        }
+        
+        success {
+            script {
+                if (params.DEPLOY_CLUSTER) {
+                    def clusterInfo = ""
+                    try {
+                        dir('minikube-terraform') {
+                            def outputs = readJSON file: 'terraform-outputs.json'
+                            clusterInfo = """
+🎉 Minikube Cluster Deployment Successful!
+=========================================
+
+📋 Cluster Information:
+• Cluster Name: ${params.CLUSTER_NAME}
+• Public IP: ${outputs.instance_public_ip.value}
+• Instance Type: ${params.INSTANCE_TYPE}
+• Minikube Version: ${params.MINIKUBE_VERSION}
+• Kubernetes Version: ${params.KUBERNETES_VERSION}
+
+🔑 Access Information:
+• SSH: ${outputs.ssh_command.value}
+• Kubeconfig: jenkins-kubeconfig.yaml (in workspace)
+
+🎯 Next Steps:
+1. Download jenkins-kubeconfig.yaml from workspace
+2. SSH to instance and run: ./cluster-health-check.sh
+3. Access dashboard: ./start-dashboard.sh
+4. Deploy applications using the kubeconfig
+
+💡 Useful Commands:
+• Check status: ${outputs.minikube_status_command.value}
+• Get kubeconfig: ${outputs.kubectl_config_command.value}
+
+🖥️ Agent Information:
+• Deployed from: ${env.NODE_NAME}
+• Workspace: ${env.WORKSPACE}
+
+💰 Remember: This cluster costs ~$0.04/hour
+🔥 Use DESTROY_CLUSTER=true when done to avoid charges
+"""
+                        }
+                    } catch (Exception e) {
+                        clusterInfo = """
+🎉 Minikube Cluster Deployment Successful!
+=========================================
+✅ Cluster deployed successfully
+📄 Check workspace for cluster-access-info.txt
+💰 Remember to destroy when done to avoid charges
+"""
+                    }
+                    echo clusterInfo
+                    
+                } else if (params.DESTROY_CLUSTER) {
+                    echo """
+🔥 Minikube Cluster Destruction Successful!
+==========================================
+✅ All AWS resources have been destroyed
+💰 No ongoing charges
+🧹 Infrastructure cleanup completed
+
+✨ Summary:
+• EC2 instance terminated
+• VPC and networking components removed
+• Security groups deleted
+• Elastic IP released
+• All associated resources cleaned up
+
+🖥️ Agent: ${env.NODE_NAME} ready for next deployment!
+💡 Tools remain installed for future builds
+"""
+                }
+            }
+        }
+        
+        failure {
+            script {
+                def troubleshooting = """
+❌ Pipeline Failed on Agent: ${env.NODE_NAME}
+============================================
+
+🔍 Common Issues and Solutions:
+
+Infrastructure Issues:
+• Check AWS credentials are valid and have permissions
+• Verify selected region has capacity for instance type
+• Ensure Terraform state is not locked
+
+Agent-Specific Issues:
+• Verify tools are installed: terraform, aws, kubectl
+• Check agent has sufficient disk space
+• Verify agent can reach AWS APIs
+
+Amazon Linux Specific:
+• Check if yum packages are up to date
+• Verify Docker is running: sudo systemctl status docker
+• Check file permissions in ${env.HOME}
+
+Network Issues:
+• Check VPC and subnet configuration
+• Verify internet gateway is attached
+• Ensure route tables are configured correctly
+
+Next Steps:
+1. Check console output for specific error messages
+2. SSH to agent and run: setup-jenkins-agent-amazon-linux.sh
+3. Verify AWS credentials: aws sts get-caller-identity
+4. Check available space: df -h
+
+💡 For quick cleanup: Run with DESTROY_CLUSTER=true
+🔧 Agent troubleshooting: Check ${env.WORKSPACE} directory
+"""
+                echo troubleshooting
+            }
+        }
+        
+        unstable {
+            echo "⚠️ Pipeline completed with warnings on agent: ${env.NODE_NAME}"
+            echo "Check logs for details and verify agent configuration."
+        }
+    }
+}
