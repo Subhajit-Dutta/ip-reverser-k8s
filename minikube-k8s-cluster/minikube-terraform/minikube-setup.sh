@@ -267,11 +267,22 @@ sleep 30
 
 # Verify final status
 echo "Final verification as ubuntu user..."
-sudo -u ubuntu minikube status || {
-    echo "ERROR: Minikube failed to start properly"
-    sudo -u ubuntu minikube logs
-    exit 1
-}
+sudo -i -u ubuntu bash -c "
+    export MINIKUBE_HOME=/home/ubuntu/.minikube
+    export KUBECONFIG=/home/ubuntu/.kube/config
+    
+    if minikube status >/dev/null 2>&1; then
+        echo '✅ Minikube is running'
+        minikube status
+    else
+        echo '❌ Minikube verification failed'
+        echo 'Available profiles:'
+        minikube profile list || echo 'No profiles found'
+        echo 'Attempting to check logs:'
+        minikube logs || echo 'No logs available'
+        exit 1
+    fi
+"
 
 # Create Jenkins service account and RBAC - SIMPLIFIED
 echo "Creating Jenkins service account..."
@@ -386,10 +397,20 @@ systemctl enable minikube.service
 
 # Final status check and success signal
 echo "Performing final health check..."
-sudo -u ubuntu bash -c "
-    minikube status
-    kubectl get nodes
-    kubectl get pods -n kube-system
+sudo -i -u ubuntu bash -c "
+    export MINIKUBE_HOME=/home/ubuntu/.minikube
+    export KUBECONFIG=/home/ubuntu/.kube/config
+    
+    echo 'Checking Minikube status...'
+    if minikube status; then
+        echo 'Getting cluster nodes...'
+        kubectl get nodes
+        echo 'Getting system pods...'
+        kubectl get pods -n kube-system
+    else
+        echo 'Minikube status check failed'
+        minikube profile list || echo 'No profiles available'
+    fi
 "
 
 # Create success marker file for Terraform to detect
