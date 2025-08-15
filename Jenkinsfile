@@ -16,7 +16,7 @@ pipeline {
         REPLICAS = '2'
         
         // Git Configuration
-        GIT_REPO = 'https://github.com/Subhajit-Dutta/ip-reverser-k8s'
+        GIT_REPO = 'git@github.com:Subhajit-Dutta/ip-reverser-k8s.git'
         GIT_BRANCH = 'master'
         
         // Build Configuration
@@ -88,7 +88,7 @@ pipeline {
                     echo "   - SSH Credential: ${SSH_KEY_CREDENTIAL}"
                     echo "   - NodePort: ${NODEPORT_SERVICE_PORT}"
                     echo "   - Docker Repo: ${DOCKER_REPO}"
-                    echo "   - Application: ${APP_NAME}"
+                    echo "   - Git Credentials: ${params.GIT_CREDENTIALS_ID}"
                     echo "   - Namespace: ${K8S_NAMESPACE}"
                     
                     // Validate IP format
@@ -103,12 +103,8 @@ pipeline {
         
         stage('📥 Checkout') {
             steps {
-                echo "🔄 Checking out code from ${GIT_REPO} - ${GIT_BRANCH} branch"
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: "*/${GIT_BRANCH}"]],
-                    userRemoteConfigs: [[url: "${GIT_REPO}"]]
-                ])
+                echo "🔄 Checking out code from repository - ${GIT_BRANCH} branch"
+                checkout scm
                 
                 script {
                     env.GIT_COMMIT_SHORT = sh(
