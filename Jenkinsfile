@@ -33,10 +33,10 @@ pipeline {
     }
     
     parameters {
-        password(
-            name: 'SSH_PRIVATE_KEY',
-            defaultValue: '',
-            description: '🔑 SSH Private Key Content (paste the entire .pem file content here)'
+        string(
+            name: 'SSH_KEY_FILE_PATH',
+            defaultValue: '/home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem',
+            description: '📁 Full path to SSH private key file on Jenkins agent'
         )
         string(
             name: 'MINIKUBE_PUBLIC_IP',
@@ -144,81 +144,66 @@ pipeline {
                 echo "🔗 Testing connection to Minikube instance..."
                 script {
                     try {
-                        // Convert Secret to String properly
-                        def sshKeyContent = params.SSH_PRIVATE_KEY?.toString()
-                        
-                        if (!sshKeyContent || sshKeyContent.trim() == '') {
-                            error("❌ SSH_PRIVATE_KEY parameter is empty. Please provide the SSH private key content.")
+                        // Validate SSH key file path parameter
+                        if (!params.SSH_KEY_FILE_PATH || params.SSH_KEY_FILE_PATH.trim() == '') {
+                            error("❌ SSH_KEY_FILE_PATH parameter is empty. Please provide the full path to SSH key file.")
                         }
                         
-                        // Write SSH key to temporary file using writeFile (safer for secrets)
-                        def sshKeyFile = "${env.WORKSPACE}/temp-ssh-key-${BUILD_NUMBER}.pem"
-                        writeFile file: sshKeyFile, text: sshKeyContent
+                        def sshKeyPath = params.SSH_KEY_FILE_PATH.trim()
                         
                         sh """
-                            echo "🔐 Setting up temporary SSH key file..."
-                            echo "🔍 SSH key file: ${sshKeyFile}"
+                            echo "🔐 Using SSH key file: ${sshKeyPath}"
                             
-                            # Set proper permissions
-                            chmod 600 "${sshKeyFile}"
-                            
-                            echo "🔍 Debugging SSH key format..."
-                            echo "Key file size: \$(wc -c < ${sshKeyFile}) bytes"
-                            echo "Number of lines: \$(wc -l < ${sshKeyFile})"
-                            echo "First line: \$(head -1 ${sshKeyFile})"
-                            echo "Last line: \$(tail -1 ${sshKeyFile})"
-                            
-                            # Check if key is in single line (common issue)
-                            if [ "\$(wc -l < ${sshKeyFile})" -lt 5 ]; then
-                                echo "⚠️ SSH key appears to be in single line format - fixing..."
-                                
-                                # Fix single-line key format by replacing spaces with newlines
-                                sed 's/-----BEGIN RSA PRIVATE KEY-----/-----BEGIN RSA PRIVATE KEY-----\\n/g' ${sshKeyFile} | \\
-                                sed 's/-----END RSA PRIVATE KEY-----/\\n-----END RSA PRIVATE KEY-----/g' | \\
-                                sed 's/ /\\n/g' > ${sshKeyFile}.fixed
-                                
-                                mv ${sshKeyFile}.fixed ${sshKeyFile}
-                                chmod 600 "${sshKeyFile}"
-                                
-                                echo "✅ Fixed SSH key format"
-                                echo "New number of lines: \$(wc -l < ${sshKeyFile})"
+                            # Check if SSH key file exists
+                            if [ ! -f "${sshKeyPath}" ]; then
+                                echo "❌ SSH key file not found: ${sshKeyPath}"
+                                echo "📂 Contents of directory \$(dirname ${sshKeyPath}):"
+                                ls -la "\$(dirname ${sshKeyPath})" || echo "Directory not accessible"
+                                exit 1
                             fi
                             
+                            echo "✅ SSH key file found: ${sshKeyPath}"
+                            
+                            # Check file permissions and content
+                            echo "📊 File info:"
+                            echo "   - Size: \$(wc -c < ${sshKeyPath}) bytes"
+                            echo "   - Lines: \$(wc -l < ${sshKeyPath})"
+                            echo "   - Permissions: \$(ls -l ${sshKeyPath})"
+                            
+                            # Set proper permissions if needed
+                            chmod 600 "${sshKeyPath}"
+                            
                             echo "🔍 Validating SSH key format..."
-                            if ! head -1 "${sshKeyFile}" | grep -q "BEGIN.*PRIVATE KEY"; then
-                                echo "❌ Invalid SSH key format. Key should start with '-----BEGIN...PRIVATE KEY-----'"
-                                echo "📄 First 5 lines of the file:"
-                                head -5 "${sshKeyFile}"
-                                rm -f "${sshKeyFile}"
+                            if ! head -1 "${sshKeyPath}" | grep -q "BEGIN.*PRIVATE KEY"; then
+                                echo "❌ Invalid SSH key format. First line: \$(head -1 ${sshKeyPath})"
+                                echo "Expected: -----BEGIN [RSA] PRIVATE KEY-----"
                                 exit 1
                             fi
                             
                             echo "🔍 Testing SSH key validity..."
-                            if ssh-keygen -l -f "${sshKeyFile}" 2>/dev/null; then
+                            if ssh-keygen -l -f "${sshKeyPath}" 2>/dev/null; then
                                 echo "✅ SSH key format is valid"
                             else
-                                echo "⚠️ SSH key validation failed - might be format issue"
+                                echo "⚠️ SSH key validation warning (might still work)"
                             fi
                             
-                            echo "🔍 Testing SSH connection to ${MINIKUBE_PUBLIC_IP}..."
-                            
-                            # Test basic connectivity first
-                            echo "Testing basic connectivity..."
+                            echo "🔍 Testing network connectivity..."
                             if timeout 5 nc -z ${MINIKUBE_PUBLIC_IP} 22; then
-                                echo "✅ SSH port 22 is accessible"
+                                echo "✅ SSH port 22 is accessible on ${MINIKUBE_PUBLIC_IP}"
                             else
-                                echo "❌ SSH port 22 is not accessible"
+                                echo "❌ SSH port 22 is not accessible on ${MINIKUBE_PUBLIC_IP}"
                                 exit 1
                             fi
                             
-                            # Try SSH connection
-                            timeout 30 ssh -i "${sshKeyFile}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
+                            echo "🔍 Testing SSH connection to ${MINIKUBE_PUBLIC_IP}..."
+                            timeout 30 ssh -i "${sshKeyPath}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
                                 ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
                                 echo '✅ SSH connection successful'
                                 echo '📋 Instance info:'
                                 echo '   - Hostname: \$(hostname)'
                                 echo '   - User: \$(whoami)'
                                 echo '   - Working directory: \$(pwd)'
+                                echo '   - OS: \$(cat /etc/os-release | grep PRETTY_NAME | cut -d\\\"=\\\" -f2 | tr -d \\\"\\\")'
                                 
                                 echo '🔍 Checking Minikube status...'
                                 if command -v minikube >/dev/null 2>&1; then
@@ -236,32 +221,25 @@ pipeline {
                                 fi
                             "
                             
-                            echo "✅ Minikube connection test completed"
+                            echo "✅ Minikube connection test completed successfully"
                         """
                     } catch (Exception e) {
                         echo "❌ SSH Connection failed: ${e.getMessage()}"
-                        echo "🔧 The issue appears to be SSH key format or credentials"
+                        echo "🔧 Troubleshooting Guide:"
+                        echo "   1. Verify SSH key file path: ${params.SSH_KEY_FILE_PATH}"
+                        echo "   2. Check file exists and has correct permissions (600)"
+                        echo "   3. Verify SSH user is correct (try 'ubuntu' or 'ec2-user')"
+                        echo "   4. Ensure Minikube instance is running at ${MINIKUBE_PUBLIC_IP}"
+                        echo "   5. Check security group allows SSH from Jenkins agent"
                         echo ""
-                        echo "💡 Common Solutions:"
-                        echo "   1. Ensure SSH key is in PROPER MULTI-LINE format:"
-                        echo "      -----BEGIN RSA PRIVATE KEY-----"
-                        echo "      MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKg..."
-                        echo "      (multiple lines of key data)"
-                        echo "      -----END RSA PRIVATE KEY-----"
-                        echo ""
-                        echo "   2. Try different SSH user:"
-                        echo "      - Change SSH_USER parameter to 'ec2-user'"
-                        echo ""
-                        echo "   3. Get fresh key content:"
-                        echo "      cat /home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem"
+                        echo "🔍 Manual Test Commands:"
+                        echo "   ssh -i ${params.SSH_KEY_FILE_PATH} ${SSH_USER}@${MINIKUBE_PUBLIC_IP}"
+                        echo "   ssh -i ${params.SSH_KEY_FILE_PATH} ec2-user@${MINIKUBE_PUBLIC_IP}"
                         echo ""
                         echo "⚠️ Continuing pipeline - but deployment will likely fail"
                         
                         // Mark build as unstable but continue
                         currentBuild.result = 'UNSTABLE'
-                    } finally {
-                        // Always cleanup the SSH key file
-                        sh "rm -f ${env.WORKSPACE}/temp-ssh-key-${BUILD_NUMBER}.pem || true"
                     }
                 }
             }
