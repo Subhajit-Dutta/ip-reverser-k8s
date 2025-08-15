@@ -162,10 +162,27 @@ pipeline {
                             # Set proper permissions
                             chmod 600 "${sshKeyFile}"
                             
-                            echo "🔍 Debugging SSH key..."
+                            echo "🔍 Debugging SSH key format..."
                             echo "Key file size: \$(wc -c < ${sshKeyFile}) bytes"
+                            echo "Number of lines: \$(wc -l < ${sshKeyFile})"
                             echo "First line: \$(head -1 ${sshKeyFile})"
                             echo "Last line: \$(tail -1 ${sshKeyFile})"
+                            
+                            # Check if key is in single line (common issue)
+                            if [ "\$(wc -l < ${sshKeyFile})" -lt 5 ]; then
+                                echo "⚠️ SSH key appears to be in single line format - fixing..."
+                                
+                                # Fix single-line key format by replacing spaces with newlines
+                                sed 's/-----BEGIN RSA PRIVATE KEY-----/-----BEGIN RSA PRIVATE KEY-----\\n/g' ${sshKeyFile} | \\
+                                sed 's/-----END RSA PRIVATE KEY-----/\\n-----END RSA PRIVATE KEY-----/g' | \\
+                                sed 's/ /\\n/g' > ${sshKeyFile}.fixed
+                                
+                                mv ${sshKeyFile}.fixed ${sshKeyFile}
+                                chmod 600 "${sshKeyFile}"
+                                
+                                echo "✅ Fixed SSH key format"
+                                echo "New number of lines: \$(wc -l < ${sshKeyFile})"
+                            fi
                             
                             echo "🔍 Validating SSH key format..."
                             if ! head -1 "${sshKeyFile}" | grep -q "BEGIN.*PRIVATE KEY"; then
@@ -177,43 +194,24 @@ pipeline {
                             fi
                             
                             echo "🔍 Testing SSH key validity..."
-                            if ! ssh-keygen -l -f "${sshKeyFile}" 2>/dev/null; then
-                                echo "⚠️ SSH key validation failed, but continuing..."
-                            else
+                            if ssh-keygen -l -f "${sshKeyFile}" 2>/dev/null; then
                                 echo "✅ SSH key format is valid"
+                            else
+                                echo "⚠️ SSH key validation failed - might be format issue"
                             fi
                             
                             echo "🔍 Testing SSH connection to ${MINIKUBE_PUBLIC_IP}..."
-                            echo "Using command: ssh -i ${sshKeyFile} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${SSH_USER}@${MINIKUBE_PUBLIC_IP}"
                             
-                            # Try connection with verbose output for debugging
-                            if ! timeout 30 ssh -v -i "${sshKeyFile}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
-                                ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "echo 'SSH test successful'" 2>&1; then
-                                echo "❌ SSH connection failed"
-                                echo "🔍 Trying alternative troubleshooting..."
-                                
-                                # Test if the host is reachable
-                                echo "Testing connectivity to ${MINIKUBE_PUBLIC_IP}..."
-                                if ping -c 3 ${MINIKUBE_PUBLIC_IP}; then
-                                    echo "✅ Host is reachable"
-                                else
-                                    echo "❌ Host is not reachable"
-                                fi
-                                
-                                # Test SSH port
-                                echo "Testing SSH port 22..."
-                                if timeout 5 nc -z ${MINIKUBE_PUBLIC_IP} 22; then
-                                    echo "✅ SSH port 22 is open"
-                                else
-                                    echo "❌ SSH port 22 is not accessible"
-                                fi
-                                
+                            # Test basic connectivity first
+                            echo "Testing basic connectivity..."
+                            if timeout 5 nc -z ${MINIKUBE_PUBLIC_IP} 22; then
+                                echo "✅ SSH port 22 is accessible"
+                            else
+                                echo "❌ SSH port 22 is not accessible"
                                 exit 1
                             fi
                             
-                            echo "✅ Basic SSH connection successful"
-                            
-                            # Now run the full test
+                            # Try SSH connection
                             timeout 30 ssh -i "${sshKeyFile}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
                                 ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
                                 echo '✅ SSH connection successful'
@@ -242,23 +240,20 @@ pipeline {
                         """
                     } catch (Exception e) {
                         echo "❌ SSH Connection failed: ${e.getMessage()}"
-                        echo "🔧 Possible issues:"
-                        echo "   1. SSH key format is incorrect (should be OpenSSH format)"
-                        echo "   2. SSH key doesn't match the Minikube instance"
-                        echo "   3. Wrong SSH user - try 'ubuntu' or 'ec2-user'"
-                        echo "   4. Minikube instance not accessible at ${MINIKUBE_PUBLIC_IP}"
-                        echo "   5. Security group doesn't allow SSH from Jenkins instance"
+                        echo "🔧 The issue appears to be SSH key format or credentials"
                         echo ""
-                        echo "💡 SSH Key Requirements:"
-                        echo "   - Should start with: -----BEGIN PRIVATE KEY-----"
-                        echo "   - Should end with: -----END PRIVATE KEY-----"
-                        echo "   - Must be in OpenSSH format (not PuTTY .ppk)"
-                        echo "   - Should match the key used when creating the Minikube instance"
+                        echo "💡 Common Solutions:"
+                        echo "   1. Ensure SSH key is in PROPER MULTI-LINE format:"
+                        echo "      -----BEGIN RSA PRIVATE KEY-----"
+                        echo "      MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKg..."
+                        echo "      (multiple lines of key data)"
+                        echo "      -----END RSA PRIVATE KEY-----"
                         echo ""
-                        echo "🔧 Troubleshooting:"
-                        echo "   1. Verify SSH key file: cat /path/to/minikube-demo-key.pem"
-                        echo "   2. Check key format: ssh-keygen -l -f /path/to/minikube-demo-key.pem"
-                        echo "   3. Test manual SSH: ssh -i /path/to/key ubuntu@${MINIKUBE_PUBLIC_IP}"
+                        echo "   2. Try different SSH user:"
+                        echo "      - Change SSH_USER parameter to 'ec2-user'"
+                        echo ""
+                        echo "   3. Get fresh key content:"
+                        echo "      cat /home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem"
                         echo ""
                         echo "⚠️ Continuing pipeline - but deployment will likely fail"
                         
