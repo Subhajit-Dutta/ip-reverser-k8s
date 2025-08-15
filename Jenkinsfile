@@ -210,8 +210,16 @@ pipeline {
                         echo "   - Latest Tag: ${LATEST_TAG}"
                         echo "   - Git Commit: ${env.GIT_COMMIT_SHORT}"
                         
+                        # Verify Docker is accessible
+                        echo "🐳 Docker version:"
+                        docker --version
+                        
+                        echo "🔨 Building Docker image..."
                         docker build -t ${DOCKER_REPO}:${env.IMAGE_TAG} .
                         docker tag ${DOCKER_REPO}:${env.IMAGE_TAG} ${DOCKER_REPO}:${LATEST_TAG}
+                        
+                        echo "📊 Verifying built images:"
+                        docker images ${DOCKER_REPO}
                     """
                     echo "✅ Docker image built successfully"
                 }
