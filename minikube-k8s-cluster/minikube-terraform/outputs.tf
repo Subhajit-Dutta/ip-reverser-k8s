@@ -1,6 +1,3 @@
-# =====================================
-# outputs.tf - ENHANCED VERSION
-# =====================================
 output "instance_id" {
   description = "ID of the EC2 instance"
   value       = aws_instance.minikube_instance.id

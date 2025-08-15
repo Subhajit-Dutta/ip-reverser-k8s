@@ -1,6 +1,3 @@
-# =====================================
-# variables.tf - ENHANCED VERSION
-# =====================================
 variable "aws_region" {
   description = "AWS region"
   type        = string
