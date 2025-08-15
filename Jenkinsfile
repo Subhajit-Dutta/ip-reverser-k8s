@@ -200,7 +200,9 @@ pipeline {
         
         stage('🧪 Test Application') {
             when {
-                not { params.SKIP_TESTS }
+                not { 
+                    expression { params.SKIP_TESTS == true }
+                }
             }
             steps {
                 echo "🧪 Testing application..."
@@ -237,7 +239,9 @@ pipeline {
         
         stage('🔐 Security Scan') {
             when {
-                not { params.SKIP_SECURITY_SCAN }
+                not { 
+                    expression { params.SKIP_SECURITY_SCAN == true }
+                }
             }
             steps {
                 echo "🔐 Running security scan..."
