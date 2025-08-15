@@ -316,16 +316,48 @@ pipeline {
             steps {
                 echo "📤 Pushing image to Docker registry..."
                 script {
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", "${DOCKER_CREDENTIALS_ID}") {
-                        sh """
-                            echo "📤 Pushing images to registry..."
-                            echo "   - ${DOCKER_REPO}:${env.IMAGE_TAG}"
-                            echo "   - ${DOCKER_REPO}:${LATEST_TAG}"
-                            
-                            docker push ${DOCKER_REPO}:${env.IMAGE_TAG}
-                            docker push ${DOCKER_REPO}:${LATEST_TAG}
-                        """
+                    try {
+                        // Check if Docker credentials exist
+                        echo "🔐 Using Docker credentials: ${DOCKER_CREDENTIALS_ID}"
+                        
+                        withCredentials([usernamePassword(
+                            credentialsId: "${DOCKER_CREDENTIALS_ID}",
+                            usernameVariable: 'DOCKER_USERNAME',
+                            passwordVariable: 'DOCKER_PASSWORD'
+                        )]) {
+                            sh """
+                                echo "🔐 Logging into Docker registry..."
+                                echo "\$DOCKER_PASSWORD" | docker login -u "\$DOCKER_USERNAME" --password-stdin ${DOCKER_REGISTRY}
+                                
+                                echo "📤 Pushing images to registry..."
+                                echo "   - ${DOCKER_REPO}:${env.IMAGE_TAG}"
+                                echo "   - ${DOCKER_REPO}:${LATEST_TAG}"
+                                
+                                docker push ${DOCKER_REPO}:${env.IMAGE_TAG}
+                                docker push ${DOCKER_REPO}:${LATEST_TAG}
+                                
+                                echo "🔓 Logging out from Docker registry..."
+                                docker logout ${DOCKER_REGISTRY}
+                            """
+                        }
                         echo "✅ Images pushed successfully"
+                    } catch (Exception e) {
+                        echo "❌ Docker push failed: ${e.getMessage()}"
+                        echo "🔧 Possible issues:"
+                        echo "   1. Docker credential '${DOCKER_CREDENTIALS_ID}' not found in Jenkins"
+                        echo "   2. Wrong credential type (should be 'Username with password')"
+                        echo "   3. Invalid Docker Hub username/password"
+                        echo "   4. Network connectivity issues"
+                        echo "   5. Docker Hub rate limiting"
+                        echo ""
+                        echo "💡 To fix:"
+                        echo "   1. Go to Jenkins → Manage Jenkins → Credentials"
+                        echo "   2. Add credential with ID: ${DOCKER_CREDENTIALS_ID}"
+                        echo "   3. Type: Username with password"
+                        echo "   4. Username: subhajitdutta"
+                        echo "   5. Password: Your Docker Hub access token"
+                        
+                        throw e
                     }
                 }
             }
