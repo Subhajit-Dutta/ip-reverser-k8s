@@ -1,3 +1,6 @@
+# =====================================
+# variables.tf - ENHANCED VERSION
+# =====================================
 variable "aws_region" {
   description = "AWS region"
   type        = string
@@ -8,6 +11,11 @@ variable "cluster_name" {
   description = "Name of the Minikube cluster"
   type        = string
   default     = "minikube-demo"
+  
+  validation {
+    condition     = can(regex("^[a-z0-9-]+$", var.cluster_name))
+    error_message = "Cluster name must contain only lowercase letters, numbers, and hyphens."
+  }
 }
 
 variable "environment" {
@@ -42,8 +50,6 @@ variable "root_volume_size" {
     error_message = "Root volume size must be at least 20GB for Minikube."
   }
 }
-
-# Removed public_key variable since we're auto-generating SSH keys
 
 variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to access the cluster"

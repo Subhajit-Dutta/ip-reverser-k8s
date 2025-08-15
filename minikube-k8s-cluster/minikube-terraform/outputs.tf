@@ -1,3 +1,6 @@
+# =====================================
+# outputs.tf - ENHANCED VERSION
+# =====================================
 output "instance_id" {
   description = "ID of the EC2 instance"
   value       = aws_instance.minikube_instance.id
@@ -77,5 +80,21 @@ output "cluster_info" {
     instance_type      = var.instance_type
     public_ip         = var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip
     private_key_path  = local_file.minikube_private_key.filename
+    ssh_command       = "ssh -i ${var.cluster_name}-key.pem ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip}"
   }
+}
+
+output "minikube_setup_command" {
+  description = "Command to manually run Minikube setup if needed"
+  value = "sudo /tmp/setup-minikube-terraform.sh '${var.cluster_name}' '${var.environment}' '${var.minikube_version}' '${var.kubernetes_version}' '${var.minikube_driver}' '${var.minikube_memory}' '${var.minikube_cpus}'"
+}
+
+output "debug_commands" {
+  description = "Useful commands for debugging"
+  value = [
+    "ssh -i ${var.cluster_name}-key.pem ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip}",
+    "tail -f /var/log/minikube-setup.log",
+    "sudo -u ubuntu minikube status",
+    "sudo -u ubuntu kubectl get nodes"
+  ]
 }

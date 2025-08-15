@@ -1,3 +1,6 @@
+# =====================================
+# main.tf - UPDATED VERSION  
+# =====================================
 terraform {
   required_version = ">= 1.0"
   required_providers {
@@ -48,8 +51,8 @@ resource "tls_private_key" "minikube_key" {
 
 # Save private key to local file
 resource "local_file" "minikube_private_key" {
-  content  = tls_private_key.minikube_key.private_key_pem
-  filename = "${path.module}/${var.cluster_name}-key.pem"
+  content         = tls_private_key.minikube_key.private_key_pem
+  filename        = "${path.module}/${var.cluster_name}-key.pem"
   file_permission = "0600"
 }
 
@@ -209,6 +212,10 @@ resource "aws_iam_role" "minikube_role" {
       }
     ]
   })
+
+  tags = {
+    Environment = var.environment
+  }
 }
 
 # IAM Policy for ECR access
@@ -247,6 +254,10 @@ resource "aws_iam_role_policy" "minikube_policy" {
 resource "aws_iam_instance_profile" "minikube_profile" {
   name = "${var.cluster_name}-ec2-profile"
   role = aws_iam_role.minikube_role.name
+
+  tags = {
+    Environment = var.environment
+  }
 }
 
 # Key Pair using generated key
@@ -259,7 +270,7 @@ resource "aws_key_pair" "minikube_key" {
   }
 }
 
-# EC2 Instance - UPDATED WITH WORKING PROVISIONERS
+# EC2 Instance - UPDATED WITH TERRAFORM-COMPATIBLE SCRIPT
 resource "aws_instance" "minikube_instance" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
@@ -268,14 +279,40 @@ resource "aws_instance" "minikube_instance" {
   subnet_id              = aws_subnet.minikube_subnet.id
   iam_instance_profile   = aws_iam_instance_profile.minikube_profile.name
 
-  # Basic user data for initial setup
+  # Enhanced user data for initial setup
   user_data = base64encode(<<-EOF
 #!/bin/bash
-apt-get update
-apt-get install -y awscli python3 python3-pip curl
+set -e
+export DEBIAN_FRONTEND=noninteractive
 
-# Create a marker that instance is ready for provisioning
-echo "Instance ready for provisioning" > /tmp/instance-ready
+# Update system
+apt-get update -y
+
+# Install essential packages
+apt-get install -y \
+    awscli \
+    python3 \
+    python3-pip \
+    curl \
+    wget \
+    unzip \
+    ca-certificates \
+    gnupg \
+    lsb-release
+
+# Ensure Docker prerequisites are available
+apt-get install -y apt-transport-https
+
+# Create readiness markers
+echo "Instance ready for provisioning at $(date)" > /tmp/instance-ready
+echo "User data execution completed at $(date)" > /tmp/userdata-complete
+
+# Log system info for debugging
+echo "System Information:" > /tmp/system-info.log
+echo "Memory: $(free -h)" >> /tmp/system-info.log
+echo "CPU: $(nproc) cores" >> /tmp/system-info.log
+echo "Disk: $(df -h /)" >> /tmp/system-info.log
+echo "Ubuntu version: $(lsb_release -a)" >> /tmp/system-info.log
 EOF
   )
 
@@ -298,8 +335,11 @@ EOF
   # Wait for instance to be ready
   provisioner "remote-exec" {
     inline = [
-      "cloud-init status --wait",
-      "echo 'Instance is ready for setup'"
+      "echo 'Waiting for cloud-init to complete...'",
+      "cloud-init status --wait || echo 'Cloud-init wait timed out, continuing...'",
+      "echo 'Checking system readiness...'",
+      "while [ ! -f /tmp/instance-ready ]; do echo 'Waiting for instance setup...'; sleep 10; done",
+      "echo 'Instance is ready for Minikube setup'"
     ]
 
     connection {
@@ -307,14 +347,14 @@ EOF
       user        = "ubuntu"
       private_key = tls_private_key.minikube_key.private_key_pem
       host        = self.public_ip
-      timeout     = "5m"
+      timeout     = "10m"
     }
   }
 
-  # Copy the final working script to the instance
+  # Copy the TERRAFORM-COMPATIBLE script to the instance
   provisioner "file" {
-    source      = "${path.module}/setup-minikube-final.sh"
-    destination = "/tmp/setup-minikube-final.sh"
+    source      = "${path.module}/setup-minikube-terraform.sh"
+    destination = "/tmp/setup-minikube-terraform.sh"
 
     connection {
       type        = "ssh"
@@ -325,20 +365,49 @@ EOF
     }
   }
 
-  # Execute the setup script with parameters
+  # Execute the setup script with enhanced error handling
   provisioner "remote-exec" {
     inline = [
-      "chmod +x /tmp/setup-minikube-final.sh",
-      "echo '🚀 Starting Minikube setup with proven working script...'",
-      "sudo /tmp/setup-minikube-final.sh '${var.cluster_name}' '${var.environment}' '${var.minikube_version}' '${var.kubernetes_version}' '${var.minikube_driver}' '${var.minikube_memory}' '${var.minikube_cpus}' 2>&1 | tee /tmp/minikube-setup.log",
-      "echo '⏳ Waiting for setup completion...'",
-      "timeout 1800 bash -c 'until [ -f /tmp/minikube-ready ]; do echo \"Still setting up Minikube...\"; sleep 30; done'",
-      "if [ -f /tmp/minikube-ready ]; then echo '✅ Setup marker found!'; cat /tmp/minikube-ready; else echo '❌ Setup timeout - check logs'; cat /tmp/minikube-setup.log | tail -50; exit 1; fi",
-      "echo '🎉 Minikube setup completed successfully!'",
-      "echo '🔍 Final verification:'",
-      "sudo -i -u ubuntu minikube status",
-      "sudo -i -u ubuntu kubectl get nodes",
-      "echo '✅ All systems go! Minikube is ready for deployments!'"
+      "chmod +x /tmp/setup-minikube-terraform.sh",
+      "echo '🚀 Starting Terraform-compatible Minikube setup...'",
+      "echo 'ℹ️ Script parameters: ${var.cluster_name} ${var.environment} ${var.minikube_version} ${var.kubernetes_version} ${var.minikube_driver} ${var.minikube_memory} ${var.minikube_cpus}'",
+      
+      # Set environment variables for the session
+      "export DEBIAN_FRONTEND=noninteractive",
+      "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      
+      # Run the script with comprehensive error handling
+      "echo 'Starting Minikube setup script...'",
+      "if sudo -E /tmp/setup-minikube-terraform.sh '${var.cluster_name}' '${var.environment}' '${var.minikube_version}' '${var.kubernetes_version}' '${var.minikube_driver}' '${var.minikube_memory}' '${var.minikube_cpus}'; then",
+      "  echo '✅ Setup script completed successfully'",
+      "else",
+      "  echo '❌ Setup script failed - showing last 100 lines of log:'",
+      "  tail -100 /var/log/minikube-setup.log",
+      "  echo 'System status:'",
+      "  free -h",
+      "  df -h",
+      "  docker ps 2>/dev/null || echo 'Docker not running'",
+      "  exit 1",
+      "fi",
+      
+      # Verify completion marker
+      "echo '⏳ Checking for completion marker...'",
+      "if [ -f /tmp/minikube-ready ]; then",
+      "  echo '✅ Setup completed successfully!'",
+      "  cat /tmp/minikube-ready",
+      "  echo '🔍 Final verification:'",
+      "  sudo -u ubuntu minikube status || echo 'Minikube status check failed'",
+      "  sudo -u ubuntu kubectl get nodes || echo 'kubectl nodes check failed'",
+      "  echo '🎉 Minikube setup completed successfully!'",
+      "else",
+      "  echo '❌ Setup failed - no completion marker found'",
+      "  echo 'Last 50 lines of setup log:'",
+      "  tail -50 /var/log/minikube-setup.log || echo 'No setup log found'",
+      "  echo 'System information:'",
+      "  free -h",
+      "  df -h",
+      "  exit 1",
+      "fi"
     ]
 
     connection {
@@ -346,7 +415,7 @@ EOF
       user        = "ubuntu"
       private_key = tls_private_key.minikube_key.private_key_pem
       host        = self.public_ip
-      timeout     = "35m"  # Generous timeout for complete setup
+      timeout     = "40m"  # Extended timeout for complete setup
     }
   }
 }

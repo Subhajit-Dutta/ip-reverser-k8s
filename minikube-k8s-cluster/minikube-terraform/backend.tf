@@ -1,13 +1,9 @@
-# backend.tf
+# =====================================
+# backend.tf - FIXED VERSION
+# =====================================
 terraform {
   backend "s3" {
-    bucket         = "your-terraform-state-bucket"
-    key            = "minikube-clusters/${var.cluster_name}/terraform.tfstate"
-    region         = "us-west-2"
-    encrypt        = true
-    dynamodb_table = "terraform-state-locks"
-    
-    # Optional: Use workspace-based state management
-    workspace_key_prefix = "minikube-environments"
+    # Configuration will be provided via backend-config.hcl
+    # No variables allowed in backend configuration
   }
 }
