@@ -1,6 +1,3 @@
-# =====================================
-# main.tf - UPDATED VERSION  
-# =====================================
 terraform {
   required_version = ">= 1.0"
   required_providers {
@@ -332,7 +329,7 @@ EOF
     create_before_destroy = true
   }
 
-  # Wait for instance to be ready
+  # SSH connection for provisioners (Ubuntu AMI)
   connection {
     type        = "ssh"
     user        = "ubuntu"
@@ -341,92 +338,18 @@ EOF
     timeout     = "30m"
   }
 
+  # Upload the setup script
   provisioner "file" {
     source      = "${path.module}/setup-minikube-terraform.sh"
     destination = "/tmp/setup-minikube-terraform.sh"
   }
 
+  # Run the setup script via sudo (each inline item is a single line)
   provisioner "remote-exec" {
     inline = [
       "sudo bash -lc 'chmod +x /tmp/setup-minikube-terraform.sh'",
       "sudo bash -lc '/tmp/setup-minikube-terraform.sh ${var.cluster_name} ${var.environment} ${var.minikube_version} ${var.kubernetes_version} docker ${var.minikube_memory} ${var.minikube_cpus} 2>&1 | tee /var/log/minikube-setup.log'"
     ]
-  }
-}
-  }
-
-  # Copy the TERRAFORM-COMPATIBLE script to the instance
-  provisioner "file" {
-    source      = "${path.module}/setup-minikube-terraform.sh"
-    destination = "/tmp/setup-minikube-terraform.sh"
-
-    
-  connection {
-    type        = "ssh"
-    user        = "ubuntu"
-    host        = self.public_ip
-    private_key = file(var.ssh_private_key_path)
-    timeout     = "30m"
-  }
-  }
-
-  # Execute the setup script with enhanced error handling
-  
-  provisioner "remote-exec" {
-    inline = [
-      "sudo bash -lc 'chmod +x /tmp/setup-minikube-terraform.sh'",
-      "sudo bash -lc '/tmp/setup-minikube-terraform.sh ${var.cluster_name} 
-    ]
-  } 
-    ]
-  } 
-      
-      # Set environment variables for the session
-      "export DEBIAN_FRONTEND=noninteractive",
-      "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-      
-      # Run the script with comprehensive error handling
-      "echo 'Starting Minikube setup script...'",
-      "if sudo -E /tmp/setup-minikube-terraform.sh '${var.cluster_name}' '${var.environment}' '${var.minikube_version}' '${var.kubernetes_version}' '${var.minikube_driver}' '${var.minikube_memory}' '${var.minikube_cpus}'; then",
-      "  echo '✅ Setup script completed successfully'",
-      "else",
-      "  echo '❌ Setup script failed - showing last 100 lines of log:'",
-      "  tail -100 /var/log/minikube-setup.log",
-      "  echo 'System status:'",
-      "  free -h",
-      "  df -h",
-      "  docker ps 2>/dev/null || echo 'Docker not running'",
-      "  exit 1",
-      "fi",
-      
-      # Verify completion marker
-      "echo '⏳ Checking for completion marker...'",
-      "if [ -f /tmp/minikube-ready ]; then",
-      "  echo '✅ Setup completed successfully!'",
-      "  cat /tmp/minikube-ready",
-      "  echo '🔍 Final verification:'",
-      "  sudo -u ubuntu minikube status || echo 'Minikube status check failed'",
-      "  sudo -u ubuntu kubectl get nodes || echo 'kubectl nodes check failed'",
-      "  echo '🎉 Minikube setup completed successfully!'",
-      "else",
-      "  echo '❌ Setup failed - no completion marker found'",
-      "  echo 'Last 50 lines of setup log:'",
-      "  tail -50 /var/log/minikube-setup.log || echo 'No setup log found'",
-      "  echo 'System information:'",
-      "  free -h",
-      "  df -h",
-      "  exit 1",
-      "fi"
-    ]
-
-    
-  connection {
-    type        = "ssh"
-    user        = "ubuntu"
-    host        = self.public_ip
-    private_key = file(var.ssh_private_key_path)
-    timeout     = "30m"
-  }
   }
 }
 
