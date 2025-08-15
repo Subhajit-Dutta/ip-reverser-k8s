@@ -249,12 +249,25 @@ pipeline {
             steps {
                 echo "🔨 Building Docker image..."
                 script {
+                    // Verify IMAGE_TAG is properly set
+                    if (env.IMAGE_TAG.contains("unknown") || env.IMAGE_TAG.contains("pending")) {
+                        echo "⚠️ IMAGE_TAG still contains placeholder: ${env.IMAGE_TAG}"
+                        echo "🔧 Regenerating IMAGE_TAG..."
+                        env.GIT_COMMIT_SHORT = sh(
+                            script: 'git rev-parse --short HEAD',
+                            returnStdout: true
+                        ).trim()
+                        env.IMAGE_TAG = "${BUILD_NUMBER}-${env.GIT_COMMIT_SHORT}"
+                        echo "✅ Updated IMAGE_TAG: ${env.IMAGE_TAG}"
+                    }
+                    
                     sh """
                         echo "📋 Build Information:"
                         echo "   - Repository: ${DOCKER_REPO}"
                         echo "   - Image Tag: ${env.IMAGE_TAG}"
                         echo "   - Latest Tag: ${LATEST_TAG}"
                         echo "   - Git Commit: ${env.GIT_COMMIT_SHORT}"
+                        echo "   - Build Number: ${BUILD_NUMBER}"
                         
                         # Verify Docker is accessible
                         echo "🐳 Docker version:"
@@ -265,7 +278,11 @@ pipeline {
                         docker tag ${DOCKER_REPO}:${env.IMAGE_TAG} ${DOCKER_REPO}:${LATEST_TAG}
                         
                         echo "📊 Verifying built images:"
-                        docker images ${DOCKER_REPO}
+                        docker images ${DOCKER_REPO} | head -5
+                        
+                        echo "✅ Images built successfully:"
+                        echo "   - ${DOCKER_REPO}:${env.IMAGE_TAG}"
+                        echo "   - ${DOCKER_REPO}:${LATEST_TAG}"
                     """
                     echo "✅ Docker image built successfully"
                 }
