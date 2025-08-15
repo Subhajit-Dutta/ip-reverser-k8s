@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Minikube Setup Script for AWS EC2 - VERSION 8 (FINAL CLEAN)
-# This script completely eliminates template variable conflicts
+# Minikube Setup Script for AWS EC2 - VERSION 9 (QUOTE FIXED)
+# This script eliminates all template conflicts and quote issues
 
 set -e
 
@@ -132,57 +132,107 @@ echo "${minikube_cpus}" > /tmp/minikube-cpus
 echo "${minikube_driver}" > /tmp/minikube-driver
 echo "${kubernetes_version}" > /tmp/minikube-k8s-version
 
-# Create startup script using base64 encoding to avoid ALL quoting issues
-base64 -d <<ENCODED_SCRIPT > /tmp/start-minikube.sh
-IyEvYmluL2Jhc2gKc2V0IC1lCgpleHBvcnQgTUlOSUtVQkVfSE9NRT0vaG9tZS91YnVudHUvLm1p
-bmlrdWJlCmV4cG9ydCBLVUJFQ09ORklHPS9ob21lL3VidW50dS8ua3ViZS9jb25maWcKZXhwb3J0
-IENIQU5HRV9NSU5JS1VCRV9OT05FX1VTRVI9dHJ1ZQoKZWNobyAiU3RhcnRpbmcgTWluaWt1YmUg
-YXMgdWJ1bnR1IHVzZXIuLi4iCmVjaG8gIkN1cnJlbnQgdXNlcjogJCh3aG9hbWkpIgplY2hvICJI
-b21lIGRpcmVjdG9yeTogJEhPTUUiCgojIFNldCB1cCBkaXJlY3Rvcmllcwpta2RpciAtcCAvaG9t
-ZS91YnVudHUvLm1pbmlrdWJlCm1rZGlyIC1wIC9ob21lL3VidW50dS8ua3ViZQpjaG93biAtUiB1
-YnVudHU6dWJ1bnR1IC9ob21lL3VidW50dS8ubWluaWt1YmUKY2hvd24gLVIgdWJ1bnR1OnVidW50
-dSAvaG9tZS91YnVudHUvLmt1YmUKCiMgVGVzdCBEb2NrZXIgYWNjZXNzCmVjaG8gIlRlc3Rpbmcg
-RG9ja2VyIGFjY2Vzcy4uLiIKaWYgISBkb2NrZXIgcHMgPi9kZXYvbnVsbCAyPiYxOyB0aGVuCiAg
-ICBlY2hvICJEb2NrZXIgYWNjZXNzIGZhaWxlZCwgYXR0ZW1wdGluZyB0byBmaXguLi4iCiAgICBz
-dWRvIGNobW9kIDY2NiAvdmFyL3J1bi9kb2NrZXIuc29jawogICAgaWYgISBkb2NrZXIgcHMgPi9k
-ZXYvbnVsbCAyPiYxOyB0aGVuCiAgICAgICAgZWNobyAiRG9ja2VyIGFjY2VzcyBzdGlsbCBmYWls
-aW5nIgogICAgICAgIGV4aXQgMQogICAgZmkKZmkKZWNobyAiRG9ja2VyIGFjY2VzcyBjb25maXJt
-ZWQiCgojIEdldCBzeXN0ZW0gcmVzb3VyY2VzIGFuZCByZWFkIGNvbmZpZ3VyYXRpb24gZnJvbSBm
-aWxlcwpUT1RBTF9NRU09JChmcmVlIC1tIHwgZ3JlcCBNZW0gfCBhd2sgJ3twcmludCAkMn0nKQpD
-UFVfQ09SRVM9JChucHJvYykKUkVRVUVTVEVEX01FTT0kKGNhdCAvdG1wL21pbmlrdWJlLW1lbW9y
-eSkKUkVRVUVTVEVEX0NQVVM9JChjYXQgL3RtcC9taW5pa3ViZS1jcHVzKQpEUklWRVI9JChjYXQg
-L3RtcC9taW5pa3ViZS1kcml2ZXIpCks4U19WRVJTSU9OPSQoY2F0IC90bXAvbWluaWt1YmUtazhz
-LXZlcnNpb24pCgplY2hvICJTeXN0ZW0gcmVzb3VyY2VzOiIKZWNobyAiICBUb3RhbCBNZW1vcnk6
-ICR7VE9UQUxfTUVNfU1CIgplY2hvICIgIENQVSBDb3JlczogJHtDUFVfQ09SRVN9IgplY2hvICIg
-IFJlcXVlc3RlZCBNZW1vcnk6ICR7UkVRVUVTVEVEX01FTX1NQiIKZWNobyAiICBSZXF1ZXN0ZWQg
-Q1BVczogJHtSRVFVRVNURURfQ1BVU30iCgojIENhbGN1bGF0ZSBhcHByb3ByaWF0ZSByZXNvdXJj
-ZXMKTUlOSUtVQkVfTUVNPSRSRVFVRVNURURfTUVNCk1JTklLVUJFX0NQVVM9JFJFUVVFU1RFRF9D
-UFVTCgppZiBbICRUT1RBTF9NRU0gLWx0ICRSRVFVRVNURURfTUVNIF07IHRoZW4KICAgIE1JTklL
-VUJFX01FTT0kKChUT1RBTF9NRU0gLSA1MTIpKQogICAgZWNobyAiQWRqdXN0aW5nIG1lbW9yeSB0
-byAke01JTklLVUJFX01FTX1NQiIKZmkKCmlmIFsgJENQVV9DT1JFUyAtbHQgJFJFUVVFU1RFRF9D
-UFVTIF07IHRoZW4KICAgIE1JTklLVUJFX0NQVVM9JENQVV9DT1JFUwogICAgZWNobyAiQWRqdXN0
-aW5nIENQVXMgdG8gJHtNSU5JS1VCRV9DUFVTFSI7CmZpCgplY2hvICJTdGFydGluZyBNaW5pa3Vi
-ZSB3aXRoOiIKZWNobyAiICBNZW1vcnk6ICR7TUlOSUtVQkVfTUVNfU1CIgplY2hvICIgIENQVXM6
-ICR7TUlOSUtVQkVfQ1BVU30iCmVjaG8gIiAgRHJpdmVyOiAke0RSSVZFUn0iCmVjaG8gIiAgS3Vi
-ZXJuZXRlczogJHtLOFNfVkVSU0lPTn0iCgojIFN0YXJ0IE1pbmlrdWJlCmlmIG1pbmlrdWJlIHN0
-YXJ0IFwKICAgIC0tZHJpdmVyPSREUklWRVIgXAogICAgLS1tZW1vcnk9JE1JTklLVUJFX01FTSBc
-CiAgICAtLWNwdXM9JE1JTklLVUJFX0NQVVMgXAogICAgLS1rdWJlcm5ldGVzLXZlcnNpb249JEs4
-U19WRVJTSU9OIFwKICAgIC0tZGVsZXRlLW9uLWZhaWx1cmUgXAogICAgLS1mb3JjZSBcCiAgICAt
-LXdhaXQ9dHJ1ZSBcCiAgICAtLXdhaXQtdGltZW91dD02MDBzIFwKICAgIC0tdj0zOyB0aGVuCiAg
-ICBlY2hvICJNaW5pa3ViZSBzdGFydGVkIHN1Y2Nlc3NmdWxseSIKZWxzZQogICAgZWNobyAiTWlu
-aWt1YmUgc3RhcnQgZmFpbGVkIgogICAgbWluaWt1YmUgbG9ncyB8fCBlY2hvICJObyBsb2dzIGF2
-YWlsYWJsZSIKICAgIGV4aXQgMQpmaQoKIyBWZXJpZnkgY2x1c3RlcgplY2hvICJWZXJpZnlpbmcg
-Y2x1c3Rlci4uLiIKbWluaWt1YmUgc3RhdHVzCmt1YmVjdGwgZ2V0IG5vZGVzCgojIFdhaXQgZm9y
-IGNsdXN0ZXIgdG8gYmUgcmVhZHkKZWNobyAiV2FpdGluZyBmb3IgY2x1c3RlciByZWFkaW5lc3Mu
-Li4iCnRpbWVvdXQgMzAwIGJhc2ggLWMgJ3VudGlsIGt1YmVjdGwgZ2V0IG5vZGVzIHwgZ3JlcCAt
-cSAiUmVhZHkiOyBkbyBlY2hvICJXYWl0aW5nLi4uIjsgc2xlZXAgMTA7IGRvbmUnCgojIEVuYWJs
-ZSBhZGRvbnMKZWNobyAiRW5hYmxpbmcgYWRkb25zLi4uIgptaW5pa3ViZSBhZGRvbnMgZW5hYmxl
-IHN0b3JhZ2UtcHJvdmlzaW9uZXIgfHwgdHJ1ZQptaW5pa3ViZSBhZGRvbnMgZW5hYmxlIGRlZmF1
-bHQtc3RvcmFnZWNsYXNzIHx8IHRydWUKbWluaWt1YmUgYWRkb25zIGVuYWJsZSBkYXNoYm9hcmQg
-fHwgZWNobyAiRGFzaGJvYXJkIGZhaWxlZCIKbWluaWt1YmUgYWRkb25zIGVuYWJsZSBtZXRyaWNz
-LXNlcnZlciB8fCBlY2hvICJNZXRyaWNzLXNlcnZlciBmYWlsZWQiCgplY2hvICJNaW5pa3ViZSBz
-ZXR1cCBjb21wbGV0ZWQgc3VjY2Vzc2Z1bGx5ISIK
-ENCODED_SCRIPT
+# Create startup script directly without base64 encoding
+cat > /tmp/start-minikube.sh << 'SCRIPT_END'
+#!/bin/bash
+set -e
+
+export MINIKUBE_HOME=/home/ubuntu/.minikube
+export KUBECONFIG=/home/ubuntu/.kube/config
+export CHANGE_MINIKUBE_NONE_USER=true
+
+echo "Starting Minikube as ubuntu user..."
+echo "Current user: $(whoami)"
+echo "Home directory: $HOME"
+
+# Set up directories
+mkdir -p /home/ubuntu/.minikube
+mkdir -p /home/ubuntu/.kube
+chown -R ubuntu:ubuntu /home/ubuntu/.minikube
+chown -R ubuntu:ubuntu /home/ubuntu/.kube
+
+# Test Docker access
+echo "Testing Docker access..."
+if ! docker ps >/dev/null 2>&1; then
+    echo "Docker access failed, attempting to fix..."
+    sudo chmod 666 /var/run/docker.sock
+    if ! docker ps >/dev/null 2>&1; then
+        echo "Docker access still failing"
+        exit 1
+    fi
+fi
+echo "Docker access confirmed"
+
+# Get system resources and read configuration from files
+TOTAL_MEM=$(free -m | grep Mem | awk '{print $2}')
+CPU_CORES=$(nproc)
+REQUESTED_MEM=$(cat /tmp/minikube-memory)
+REQUESTED_CPUS=$(cat /tmp/minikube-cpus)
+DRIVER=$(cat /tmp/minikube-driver)
+K8S_VERSION=$(cat /tmp/minikube-k8s-version)
+
+echo "System resources:"
+echo "  Total Memory: ${TOTAL_MEM}MB"
+echo "  CPU Cores: ${CPU_CORES}"
+echo "  Requested Memory: ${REQUESTED_MEM}MB"
+echo "  Requested CPUs: ${REQUESTED_CPUS}"
+
+# Calculate appropriate resources
+MINIKUBE_MEM=$REQUESTED_MEM
+MINIKUBE_CPUS=$REQUESTED_CPUS
+
+if [ $TOTAL_MEM -lt $REQUESTED_MEM ]; then
+    MINIKUBE_MEM=$((TOTAL_MEM - 512))
+    echo "Adjusting memory to ${MINIKUBE_MEM}MB"
+fi
+
+if [ $CPU_CORES -lt $REQUESTED_CPUS ]; then
+    MINIKUBE_CPUS=$CPU_CORES
+    echo "Adjusting CPUs to ${MINIKUBE_CPUS}"
+fi
+
+echo "Starting Minikube with:"
+echo "  Memory: ${MINIKUBE_MEM}MB"
+echo "  CPUs: ${MINIKUBE_CPUS}"
+echo "  Driver: ${DRIVER}"
+echo "  Kubernetes: ${K8S_VERSION}"
+
+# Start Minikube
+if minikube start \
+    --driver=$DRIVER \
+    --memory=$MINIKUBE_MEM \
+    --cpus=$MINIKUBE_CPUS \
+    --kubernetes-version=$K8S_VERSION \
+    --delete-on-failure \
+    --force \
+    --wait=true \
+    --wait-timeout=600s \
+    --v=3; then
+    echo "Minikube started successfully"
+else
+    echo "Minikube start failed"
+    minikube logs || echo "No logs available"
+    exit 1
+fi
+
+# Verify cluster
+echo "Verifying cluster..."
+minikube status
+kubectl get nodes
+
+# Wait for cluster to be ready
+echo "Waiting for cluster readiness..."
+timeout 300 bash -c 'until kubectl get nodes | grep -q "Ready"; do echo "Waiting..."; sleep 10; done'
+
+# Enable addons
+echo "Enabling addons..."
+minikube addons enable storage-provisioner || true
+minikube addons enable default-storageclass || true
+minikube addons enable dashboard || echo "Dashboard failed"
+minikube addons enable metrics-server || echo "Metrics-server failed"
+
+echo "Minikube setup completed successfully!"
+SCRIPT_END
 
 chmod +x /tmp/start-minikube.sh
 
