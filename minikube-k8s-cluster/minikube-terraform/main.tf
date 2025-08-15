@@ -333,22 +333,13 @@ EOF
   }
 
   # Wait for instance to be ready
+  
   provisioner "remote-exec" {
     inline = [
-      "echo 'Waiting for cloud-init to complete...'",
-      "cloud-init status --wait || echo 'Cloud-init wait timed out, continuing...'",
-      "echo 'Checking system readiness...'",
-      "while [ ! -f /tmp/instance-ready ]; do echo 'Waiting for instance setup...'; sleep 10; done",
-      "echo 'Instance is ready for Minikube setup'"
+      "sudo bash -lc 'chmod +x /tmp/setup-minikube-terraform.sh'",
+      "sudo bash -lc "/tmp/setup-minikube-terraform.sh ${var.cluster_name} ${var.environment} ${var.minikube_version} ${var.kubernetes_version} docker ${var.minikube_memory} ${var.minikube_cpus} 2>&1 | tee /var/log/minikube-setup.log""
     ]
-
-    connection {
-      type        = "ssh"
-      user        = "ubuntu"
-      private_key = tls_private_key.minikube_key.private_key_pem
-      host        = self.public_ip
-      timeout     = "10m"
-    }
+  }
   }
 
   # Copy the TERRAFORM-COMPATIBLE script to the instance
@@ -356,21 +347,24 @@ EOF
     source      = "${path.module}/setup-minikube-terraform.sh"
     destination = "/tmp/setup-minikube-terraform.sh"
 
-    connection {
-      type        = "ssh"
-      user        = "ubuntu"
-      private_key = tls_private_key.minikube_key.private_key_pem
-      host        = self.public_ip
-      timeout     = "5m"
-    }
+    
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    host        = self.public_ip
+    private_key = file(var.ssh_private_key_path)
+    timeout     = "30m"
+  }
   }
 
   # Execute the setup script with enhanced error handling
+  
   provisioner "remote-exec" {
     inline = [
-      "chmod +x /tmp/setup-minikube-terraform.sh",
-      "echo '🚀 Starting Terraform-compatible Minikube setup...'",
-      "echo 'ℹ️ Script parameters: ${var.cluster_name} ${var.environment} ${var.minikube_version} ${var.kubernetes_version} ${var.minikube_driver} ${var.minikube_memory} ${var.minikube_cpus}'",
+      "sudo bash -lc 'chmod +x /tmp/setup-minikube-terraform.sh'",
+      "sudo bash -lc "/tmp/setup-minikube-terraform.sh ${var.cluster_name} ${var.environment} ${var.minikube_version} ${var.kubernetes_version} docker ${var.minikube_memory} ${var.minikube_cpus} 2>&1 | tee /var/log/minikube-setup.log""
+    ]
+  } ${var.environment} ${var.minikube_version} ${var.kubernetes_version} ${var.minikube_driver} ${var.minikube_memory} ${var.minikube_cpus}'",
       
       # Set environment variables for the session
       "export DEBIAN_FRONTEND=noninteractive",
@@ -410,13 +404,14 @@ EOF
       "fi"
     ]
 
-    connection {
-      type        = "ssh"
-      user        = "ubuntu"
-      private_key = tls_private_key.minikube_key.private_key_pem
-      host        = self.public_ip
-      timeout     = "40m"  # Extended timeout for complete setup
-    }
+    
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    host        = self.public_ip
+    private_key = file(var.ssh_private_key_path)
+    timeout     = "30m"
+  }
   }
 }
 

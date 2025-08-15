@@ -98,3 +98,18 @@ output "debug_commands" {
     "sudo -u ubuntu kubectl get nodes"
   ]
 }
+
+output "minikube_log_tail_command" {
+  description = "SSH command to tail the Minikube setup log live"
+  value       = "ssh -i ${var.cluster_name}-key.pem ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip} 'sudo tail -f /var/log/minikube-setup.log'"
+}
+
+output "minikube_log_show_command" {
+  description = "SSH command to show the last 200 lines of the Minikube setup log"
+  value       = "ssh -i ${var.cluster_name}-key.pem ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip} 'sudo tail -n 200 /var/log/minikube-setup.log'"
+}
+
+output "minikube_ready_check_command" {
+  description = "SSH command to check the Terraform success marker"
+  value       = "ssh -i ${var.cluster_name}-key.pem ubuntu@${var.use_elastic_ip ? aws_eip.minikube_eip[0].public_ip : aws_instance.minikube_instance.public_ip} 'cat /tmp/minikube-ready || echo not-ready'"
+}
