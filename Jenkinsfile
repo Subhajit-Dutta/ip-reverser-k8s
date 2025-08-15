@@ -276,15 +276,37 @@ pipeline {
                 script {
                     try {
                         sh """
-                            if command -v trivy >/dev/null 2>&1; then
-                                echo "📊 Running Trivy security scan..."
-                                trivy image --exit-code 0 --severity HIGH,CRITICAL ${DOCKER_REPO}:${env.IMAGE_TAG}
+                            # Check if Trivy is installed
+                            if ! command -v trivy >/dev/null 2>&1; then
+                                echo "📦 Installing Trivy..."
+                                cd /tmp
+                                
+                                # Download and install Trivy
+                                wget -q https://github.com/aquasecurity/trivy/releases/download/v0.48.3/trivy_0.48.3_Linux-64bit.tar.gz
+                                tar zxf trivy_0.48.3_Linux-64bit.tar.gz
+                                sudo mv trivy /usr/local/bin/
+                                rm trivy_0.48.3_Linux-64bit.tar.gz
+                                
+                                echo "✅ Trivy installed successfully"
+                                trivy version
                             else
-                                echo "⚠️ Trivy not installed, skipping security scan"
+                                echo "✅ Trivy already installed"
+                                trivy version
                             fi
+                            
+                            echo "📊 Running Trivy security scan..."
+                            trivy image \\
+                                --format table \\
+                                --exit-code 0 \\
+                                --severity HIGH,CRITICAL \\
+                                --no-progress \\
+                                ${DOCKER_REPO}:${env.IMAGE_TAG}
+                            
+                            echo "✅ Security scan completed"
                         """
                     } catch (Exception e) {
                         echo "⚠️ Security scan failed but continuing: ${e.getMessage()}"
+                        currentBuild.result = 'UNSTABLE'
                     }
                 }
             }
