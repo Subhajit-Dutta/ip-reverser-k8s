@@ -26,7 +26,6 @@ pipeline {
         // Minikube Configuration - CONFIGURABLE PARAMETERS
         MINIKUBE_PUBLIC_IP = "${params.MINIKUBE_PUBLIC_IP ?: '52.42.72.58'}"
         SSH_USER = "${params.SSH_USER ?: 'ubuntu'}"
-        SSH_KEY_CREDENTIAL = "${params.SSH_KEY_CREDENTIAL ?: 'minikube-ssh-key'}"
         NODEPORT_SERVICE_PORT = "${params.NODEPORT_SERVICE_PORT ?: '30080'}"
         
         // Initialize IMAGE_TAG with safe default
@@ -34,6 +33,11 @@ pipeline {
     }
     
     parameters {
+        password(
+            name: 'SSH_PRIVATE_KEY',
+            defaultValue: '',
+            description: '🔑 SSH Private Key Content (paste the entire .pem file content here)'
+        )
         string(
             name: 'MINIKUBE_PUBLIC_IP',
             defaultValue: '52.42.72.58',
@@ -140,23 +144,33 @@ pipeline {
                 echo "🔗 Testing connection to Minikube instance..."
                 script {
                     try {
+                        if (!params.SSH_PRIVATE_KEY || params.SSH_PRIVATE_KEY.trim() == '') {
+                            error("❌ SSH_PRIVATE_KEY parameter is empty. Please provide the SSH private key content.")
+                        }
+                        
                         sh """
-                            echo "🔍 Using hardcoded SSH key path..."
-                            SSH_KEY_PATH="/home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem"
+                            echo "🔐 Creating temporary SSH key file..."
                             
-                            echo "🔐 Checking SSH key file..."
-                            if [ -f "\$SSH_KEY_PATH" ]; then
-                                echo "✅ SSH key found: \$SSH_KEY_PATH"
-                                chmod 600 "\$SSH_KEY_PATH"
-                            else
-                                echo "❌ SSH key not found at: \$SSH_KEY_PATH"
-                                echo "📂 Available files in directory:"
-                                ls -la /home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/ || true
+                            # Create temporary SSH key file
+                            SSH_KEY_FILE="\${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem"
+                            
+                            # Write SSH key content to file (using cat with here document for security)
+                            cat > "\$SSH_KEY_FILE" << 'EOF_SSH_KEY'
+${params.SSH_PRIVATE_KEY}
+EOF_SSH_KEY
+                            
+                            # Set proper permissions
+                            chmod 600 "\$SSH_KEY_FILE"
+                            
+                            echo "🔍 Validating SSH key format..."
+                            if ! head -1 "\$SSH_KEY_FILE" | grep -q "BEGIN.*PRIVATE KEY"; then
+                                echo "❌ Invalid SSH key format. Key should start with '-----BEGIN...PRIVATE KEY-----'"
+                                rm -f "\$SSH_KEY_FILE"
                                 exit 1
                             fi
                             
                             echo "🔍 Testing SSH connection to ${MINIKUBE_PUBLIC_IP}..."
-                            timeout 30 ssh -i "\$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
+                            timeout 30 ssh -i "\$SSH_KEY_FILE" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
                                 ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
                                 echo '✅ SSH connection successful'
                                 echo '📋 Instance info:'
@@ -180,15 +194,25 @@ pipeline {
                                 fi
                             "
                             
+                            # Cleanup temporary SSH key
+                            rm -f "\$SSH_KEY_FILE"
                             echo "✅ Minikube connection test completed"
                         """
                     } catch (Exception e) {
+                        // Cleanup on failure
+                        sh "rm -f \${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem || true"
+                        
                         echo "❌ SSH Connection failed: ${e.getMessage()}"
                         echo "🔧 Possible issues:"
-                        echo "   1. SSH key file not found at hardcoded path"
-                        echo "   2. Minikube instance not accessible at ${MINIKUBE_PUBLIC_IP}"
-                        echo "   3. Security group doesn't allow SSH from Jenkins instance"
-                        echo "   4. Wrong SSH user (currently using: ${SSH_USER})"
+                        echo "   1. Invalid SSH private key format"
+                        echo "   2. SSH key doesn't match the Minikube instance"
+                        echo "   3. Minikube instance not accessible at ${MINIKUBE_PUBLIC_IP}"
+                        echo "   4. Security group doesn't allow SSH from Jenkins instance"
+                        echo "   5. Wrong SSH user (currently using: ${SSH_USER})"
+                        echo ""
+                        echo "💡 SSH Key Format:"
+                        echo "   The key should start with: -----BEGIN PRIVATE KEY-----"
+                        echo "   And end with: -----END PRIVATE KEY-----"
                         echo ""
                         echo "⚠️ Continuing pipeline - but deployment will likely fail"
                         
@@ -374,22 +398,27 @@ pipeline {
                             echo "   - Image: ${DOCKER_REPO}:${env.IMAGE_TAG}"
                             echo "   - Namespace: ${K8S_NAMESPACE}"
                             
-                            # Set SSH key path
-                            SSH_KEY_PATH="/home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem"
+                            # Create temporary SSH key file
+                            SSH_KEY_FILE="\${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem"
                             
-                            echo "🔐 Ensuring SSH key permissions..."
-                            chmod 600 "\$SSH_KEY_PATH"
+                            # Write SSH key content to file
+                            cat > "\$SSH_KEY_FILE" << 'EOF_SSH_KEY'
+${params.SSH_PRIVATE_KEY}
+EOF_SSH_KEY
+                            
+                            # Set proper permissions
+                            chmod 600 "\$SSH_KEY_FILE"
                             
                             # Create deployment file with updated image
                             sed 's|image: ip-reverse-app:latest|image: ${DOCKER_REPO}:${env.IMAGE_TAG}|g' k8s-deployment.yaml > k8s-deployment-${BUILD_NUMBER}.yaml
                             
                             # Copy deployment file to Minikube instance
-                            scp -i "\$SSH_KEY_PATH" -o StrictHostKeyChecking=no \\
+                            scp -i "\$SSH_KEY_FILE" -o StrictHostKeyChecking=no \\
                                 k8s-deployment-${BUILD_NUMBER}.yaml \\
                                 ${SSH_USER}@${MINIKUBE_PUBLIC_IP}:/tmp/k8s-deployment-${BUILD_NUMBER}.yaml
                             
                             # Connect and deploy
-                            ssh -i "\$SSH_KEY_PATH" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
+                            ssh -i "\$SSH_KEY_FILE" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
                                 echo '🚀 Starting deployment on Minikube...'
                                 
                                 # Ensure namespace exists
@@ -416,8 +445,13 @@ pipeline {
                                 
                                 echo '✅ Deployment completed successfully'
                             "
+                            
+                            # Cleanup temporary SSH key
+                            rm -f "\$SSH_KEY_FILE"
                         """
                     } catch (Exception e) {
+                        // Cleanup on failure
+                        sh "rm -f \${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem || true"
                         echo "❌ Deployment failed: ${e.getMessage()}"
                         throw e
                     }
@@ -425,7 +459,10 @@ pipeline {
             }
             post {
                 always {
-                    sh "rm -f k8s-deployment-${BUILD_NUMBER}.yaml"
+                    sh """
+                        rm -f k8s-deployment-${BUILD_NUMBER}.yaml || true
+                        rm -f \${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem || true
+                    """
                 }
             }
         }
@@ -438,12 +475,19 @@ pipeline {
                         sh """
                             echo "🧪 Testing application via multiple methods..."
                             
-                            # Set SSH key path
-                            SSH_KEY_PATH="/home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem"
-                            chmod 600 "\$SSH_KEY_PATH"
+                            # Create temporary SSH key file
+                            SSH_KEY_FILE="\${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem"
+                            
+                            # Write SSH key content to file
+                            cat > "\$SSH_KEY_FILE" << 'EOF_SSH_KEY'
+${params.SSH_PRIVATE_KEY}
+EOF_SSH_KEY
+                            
+                            # Set proper permissions
+                            chmod 600 "\$SSH_KEY_FILE"
                             
                             # Method 1: Test via SSH on Minikube instance
-                            ssh -i "\$SSH_KEY_PATH" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
+                            ssh -i "\$SSH_KEY_FILE" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
                                 echo '🔍 Getting service URL from Minikube...'
                                 SERVICE_URL=\\\$(minikube service ${APP_NAME}-service --url -n ${K8S_NAMESPACE})
                                 echo '🌐 Internal Service URL: '\\\$SERVICE_URL
@@ -473,9 +517,13 @@ pipeline {
                                 echo "   Application is still accessible from within the Minikube instance"
                             fi
                             
+                            # Cleanup temporary SSH key
+                            rm -f "\$SSH_KEY_FILE"
                             echo "🎉 Smoke tests completed"
                         """
                     } catch (Exception e) {
+                        // Cleanup on failure
+                        sh "rm -f \${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem || true"
                         echo "❌ Smoke tests failed: ${e.getMessage()}"
                         currentBuild.result = 'UNSTABLE'
                     }
