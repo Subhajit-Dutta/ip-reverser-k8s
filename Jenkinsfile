@@ -144,33 +144,32 @@ pipeline {
                 echo "🔗 Testing connection to Minikube instance..."
                 script {
                     try {
-                        if (!params.SSH_PRIVATE_KEY || params.SSH_PRIVATE_KEY.trim() == '') {
+                        // Convert Secret to String properly
+                        def sshKeyContent = params.SSH_PRIVATE_KEY?.toString()
+                        
+                        if (!sshKeyContent || sshKeyContent.trim() == '') {
                             error("❌ SSH_PRIVATE_KEY parameter is empty. Please provide the SSH private key content.")
                         }
                         
+                        // Write SSH key to temporary file using writeFile (safer for secrets)
+                        def sshKeyFile = "${env.WORKSPACE}/temp-ssh-key-${BUILD_NUMBER}.pem"
+                        writeFile file: sshKeyFile, text: sshKeyContent
+                        
                         sh """
-                            echo "🔐 Creating temporary SSH key file..."
-                            
-                            # Create temporary SSH key file
-                            SSH_KEY_FILE="\${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem"
-                            
-                            # Write SSH key content to file (using cat with here document for security)
-                            cat > "\$SSH_KEY_FILE" << 'EOF_SSH_KEY'
-${params.SSH_PRIVATE_KEY}
-EOF_SSH_KEY
+                            echo "🔐 Setting up temporary SSH key file..."
                             
                             # Set proper permissions
-                            chmod 600 "\$SSH_KEY_FILE"
+                            chmod 600 "${sshKeyFile}"
                             
                             echo "🔍 Validating SSH key format..."
-                            if ! head -1 "\$SSH_KEY_FILE" | grep -q "BEGIN.*PRIVATE KEY"; then
+                            if ! head -1 "${sshKeyFile}" | grep -q "BEGIN.*PRIVATE KEY"; then
                                 echo "❌ Invalid SSH key format. Key should start with '-----BEGIN...PRIVATE KEY-----'"
-                                rm -f "\$SSH_KEY_FILE"
+                                rm -f "${sshKeyFile}"
                                 exit 1
                             fi
                             
                             echo "🔍 Testing SSH connection to ${MINIKUBE_PUBLIC_IP}..."
-                            timeout 30 ssh -i "\$SSH_KEY_FILE" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
+                            timeout 30 ssh -i "${sshKeyFile}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
                                 ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
                                 echo '✅ SSH connection successful'
                                 echo '📋 Instance info:'
@@ -194,14 +193,9 @@ EOF_SSH_KEY
                                 fi
                             "
                             
-                            # Cleanup temporary SSH key
-                            rm -f "\$SSH_KEY_FILE"
                             echo "✅ Minikube connection test completed"
                         """
                     } catch (Exception e) {
-                        // Cleanup on failure
-                        sh "rm -f \${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem || true"
-                        
                         echo "❌ SSH Connection failed: ${e.getMessage()}"
                         echo "🔧 Possible issues:"
                         echo "   1. Invalid SSH private key format"
@@ -218,6 +212,9 @@ EOF_SSH_KEY
                         
                         // Mark build as unstable but continue
                         currentBuild.result = 'UNSTABLE'
+                    } finally {
+                        // Always cleanup the SSH key file
+                        sh "rm -f ${env.WORKSPACE}/temp-ssh-key-${BUILD_NUMBER}.pem || true"
                     }
                 }
             }
