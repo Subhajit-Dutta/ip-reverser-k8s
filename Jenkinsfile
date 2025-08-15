@@ -28,7 +28,7 @@ pipeline {
         SSH_USER = "${params.SSH_USER ?: 'ubuntu'}"
         NODEPORT_SERVICE_PORT = "${params.NODEPORT_SERVICE_PORT ?: '30080'}"
         
-        // Initialize IMAGE_TAG with safe default
+        // Initialize IMAGE_TAG - will be updated with Git commit hash
         IMAGE_TAG = "${BUILD_NUMBER}-unknown"
     }
     
@@ -36,7 +36,7 @@ pipeline {
         string(
             name: 'SSH_KEY_FILE_PATH',
             defaultValue: '/home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem',
-            description: '📁 Full path to SSH private key file on Jenkins agent'
+            description: '🔐 Full path to SSH private key file on Jenkins agent'
         )
         string(
             name: 'MINIKUBE_PUBLIC_IP',
@@ -66,7 +66,7 @@ pipeline {
         booleanParam(
             name: 'SKIP_SECURITY_SCAN',
             defaultValue: false,
-            description: '🔐 Skip security scan'
+            description: '🔒 Skip security scan'
         )
         booleanParam(
             name: 'FORCE_REBUILD',
@@ -89,6 +89,7 @@ pipeline {
                     echo "📋 Configuration Summary:"
                     echo "   - Minikube Public IP: ${MINIKUBE_PUBLIC_IP}"
                     echo "   - SSH User: ${SSH_USER}"
+                    echo "   - SSH Key Path: ${params.SSH_KEY_FILE_PATH}"
                     echo "   - SSH Credential: ${SSH_KEY_CREDENTIAL}"
                     echo "   - NodePort: ${NODEPORT_SERVICE_PORT}"
                     echo "   - Docker Repo: ${DOCKER_REPO}"
@@ -107,10 +108,11 @@ pipeline {
         
         stage('📥 Checkout') {
             steps {
-                echo "🔄 Checking out code from repository - ${GIT_BRANCH} branch"
+                echo "📄 Checking out code from repository - ${GIT_BRANCH} branch"
                 checkout scm
                 
                 script {
+                    // Get Git commit hash and update IMAGE_TAG
                     env.GIT_COMMIT_SHORT = sh(
                         script: 'git rev-parse --short HEAD',
                         returnStdout: true
@@ -118,14 +120,14 @@ pipeline {
                     env.IMAGE_TAG = "${BUILD_NUMBER}-${env.GIT_COMMIT_SHORT}"
                 }
                 
-                echo "📝 Git commit: ${env.GIT_COMMIT_SHORT}"
+                echo "🔍 Git commit: ${env.GIT_COMMIT_SHORT}"
                 echo "🏷️ Image tag: ${env.IMAGE_TAG}"
             }
         }
         
-        stage('🔍 Validate Files') {
+        stage('📁 Validate Files') {
             steps {
-                echo "🔍 Validating required files..."
+                echo "📁 Validating required files..."
                 script {
                     def requiredFiles = ['app.py', 'requirements.txt', 'Dockerfile', 'k8s-deployment.yaml']
                     requiredFiles.each { file ->
@@ -152,7 +154,7 @@ pipeline {
                         def sshKeyPath = params.SSH_KEY_FILE_PATH.trim()
                         
                         sh """
-                            echo "🔐 Using SSH key file: ${sshKeyPath}"
+                            echo "🔍 Using SSH key file: ${sshKeyPath}"
                             
                             # Check if SSH key file exists
                             if [ ! -f "${sshKeyPath}" ]; then
@@ -198,7 +200,7 @@ pipeline {
                             echo "🔍 Testing SSH connection to ${MINIKUBE_PUBLIC_IP}..."
                             timeout 30 ssh -i "${sshKeyPath}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
                                 ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
-                                echo '✅ SSH connection successful'
+                                echo 'ā SSH connection successful'
                                 echo '📋 Instance info:'
                                 echo '   - Hostname: \$(hostname)'
                                 echo '   - User: \$(whoami)'
@@ -249,7 +251,7 @@ pipeline {
             steps {
                 echo "🔨 Building Docker image..."
                 script {
-                    // Verify IMAGE_TAG is properly set
+                    // Verify IMAGE_TAG is properly set with Git commit hash
                     if (env.IMAGE_TAG.contains("unknown") || env.IMAGE_TAG.contains("pending")) {
                         echo "⚠️ IMAGE_TAG still contains placeholder: ${env.IMAGE_TAG}"
                         echo "🔧 Regenerating IMAGE_TAG..."
@@ -328,14 +330,14 @@ pipeline {
             }
         }
         
-        stage('🔐 Security Scan') {
+        stage('🔒 Security Scan') {
             when {
                 not { 
                     expression { params.SKIP_SECURITY_SCAN == true }
                 }
             }
             steps {
-                echo "🔐 Running security scan..."
+                echo "🔒 Running security scan..."
                 script {
                     try {
                         sh """
@@ -381,7 +383,7 @@ pipeline {
                 script {
                     try {
                         // Check if Docker credentials exist
-                        echo "🔐 Using Docker credentials: ${DOCKER_CREDENTIALS_ID}"
+                        echo "🔍 Using Docker credentials: ${DOCKER_CREDENTIALS_ID}"
                         
                         withCredentials([usernamePassword(
                             credentialsId: "${DOCKER_CREDENTIALS_ID}",
@@ -389,7 +391,7 @@ pipeline {
                             passwordVariable: 'DOCKER_PASSWORD'
                         )]) {
                             sh """
-                                echo "🔐 Logging into Docker registry..."
+                                echo "🔍 Logging into Docker registry..."
                                 echo "\$DOCKER_PASSWORD" | docker login -u "\$DOCKER_USERNAME" --password-stdin ${DOCKER_REGISTRY}
                                 
                                 echo "📤 Pushing images to registry..."
@@ -399,7 +401,7 @@ pipeline {
                                 docker push ${DOCKER_REPO}:${env.IMAGE_TAG}
                                 docker push ${DOCKER_REPO}:${LATEST_TAG}
                                 
-                                echo "🔓 Logging out from Docker registry..."
+                                echo "📝 Logging out from Docker registry..."
                                 docker logout ${DOCKER_REGISTRY}
                             """
                         }
@@ -431,33 +433,34 @@ pipeline {
                 echo "🚀 Deploying to remote Minikube cluster..."
                 script {
                     try {
+                        def sshKeyPath = params.SSH_KEY_FILE_PATH.trim()
+                        
                         sh """
                             echo "📦 Preparing deployment for remote Minikube..."
                             echo "   - Target: ${SSH_USER}@${MINIKUBE_PUBLIC_IP}"
+                            echo "   - SSH Key: ${sshKeyPath}"
                             echo "   - Image: ${DOCKER_REPO}:${env.IMAGE_TAG}"
                             echo "   - Namespace: ${K8S_NAMESPACE}"
                             
-                            # Create temporary SSH key file
-                            SSH_KEY_FILE="\${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem"
-                            
-                            # Write SSH key content to file
-                            cat > "\$SSH_KEY_FILE" << 'EOF_SSH_KEY'
-${params.SSH_PRIVATE_KEY}
-EOF_SSH_KEY
+                            # Verify SSH key file exists
+                            if [ ! -f "${sshKeyPath}" ]; then
+                                echo "❌ SSH key file not found: ${sshKeyPath}"
+                                exit 1
+                            fi
                             
                             # Set proper permissions
-                            chmod 600 "\$SSH_KEY_FILE"
+                            chmod 600 "${sshKeyPath}"
                             
                             # Create deployment file with updated image
                             sed 's|image: ip-reverse-app:latest|image: ${DOCKER_REPO}:${env.IMAGE_TAG}|g' k8s-deployment.yaml > k8s-deployment-${BUILD_NUMBER}.yaml
                             
                             # Copy deployment file to Minikube instance
-                            scp -i "\$SSH_KEY_FILE" -o StrictHostKeyChecking=no \\
+                            scp -i "${sshKeyPath}" -o StrictHostKeyChecking=no \\
                                 k8s-deployment-${BUILD_NUMBER}.yaml \\
                                 ${SSH_USER}@${MINIKUBE_PUBLIC_IP}:/tmp/k8s-deployment-${BUILD_NUMBER}.yaml
                             
                             # Connect and deploy
-                            ssh -i "\$SSH_KEY_FILE" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
+                            ssh -i "${sshKeyPath}" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
                                 echo '🚀 Starting deployment on Minikube...'
                                 
                                 # Ensure namespace exists
@@ -484,13 +487,8 @@ EOF_SSH_KEY
                                 
                                 echo '✅ Deployment completed successfully'
                             "
-                            
-                            # Cleanup temporary SSH key
-                            rm -f "\$SSH_KEY_FILE"
                         """
                     } catch (Exception e) {
-                        // Cleanup on failure
-                        sh "rm -f \${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem || true"
                         echo "❌ Deployment failed: ${e.getMessage()}"
                         throw e
                     }
@@ -500,7 +498,6 @@ EOF_SSH_KEY
                 always {
                     sh """
                         rm -f k8s-deployment-${BUILD_NUMBER}.yaml || true
-                        rm -f \${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem || true
                     """
                 }
             }
@@ -511,22 +508,22 @@ EOF_SSH_KEY
                 echo "💨 Running smoke tests on deployed application..."
                 script {
                     try {
+                        def sshKeyPath = params.SSH_KEY_FILE_PATH.trim()
+                        
                         sh """
                             echo "🧪 Testing application via multiple methods..."
                             
-                            # Create temporary SSH key file
-                            SSH_KEY_FILE="\${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem"
-                            
-                            # Write SSH key content to file
-                            cat > "\$SSH_KEY_FILE" << 'EOF_SSH_KEY'
-${params.SSH_PRIVATE_KEY}
-EOF_SSH_KEY
+                            # Verify SSH key file exists
+                            if [ ! -f "${sshKeyPath}" ]; then
+                                echo "❌ SSH key file not found: ${sshKeyPath}"
+                                exit 1
+                            fi
                             
                             # Set proper permissions
-                            chmod 600 "\$SSH_KEY_FILE"
+                            chmod 600 "${sshKeyPath}"
                             
                             # Method 1: Test via SSH on Minikube instance
-                            ssh -i "\$SSH_KEY_FILE" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
+                            ssh -i "${sshKeyPath}" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
                                 echo '🔍 Getting service URL from Minikube...'
                                 SERVICE_URL=\\\$(minikube service ${APP_NAME}-service --url -n ${K8S_NAMESPACE})
                                 echo '🌐 Internal Service URL: '\\\$SERVICE_URL
@@ -556,13 +553,9 @@ EOF_SSH_KEY
                                 echo "   Application is still accessible from within the Minikube instance"
                             fi
                             
-                            # Cleanup temporary SSH key
-                            rm -f "\$SSH_KEY_FILE"
                             echo "🎉 Smoke tests completed"
                         """
                     } catch (Exception e) {
-                        // Cleanup on failure
-                        sh "rm -f \${WORKSPACE}/temp-ssh-key-\${BUILD_NUMBER}.pem || true"
                         echo "❌ Smoke tests failed: ${e.getMessage()}"
                         currentBuild.result = 'UNSTABLE'
                     }
@@ -620,10 +613,10 @@ EOF_SSH_KEY
 
 🌐 Access Your Application:
 • NodePort URL: http://${MINIKUBE_PUBLIC_IP}:${NODEPORT_SERVICE_PORT}
-• SSH to Minikube: ssh -i your-key.pem ${SSH_USER}@${MINIKUBE_PUBLIC_IP}
+• SSH to Minikube: ssh -i ${params.SSH_KEY_FILE_PATH} ${SSH_USER}@${MINIKUBE_PUBLIC_IP}
 
 📊 Check Status (via SSH):
-ssh -i your-key.pem ${SSH_USER}@${MINIKUBE_PUBLIC_IP}
+ssh -i ${params.SSH_KEY_FILE_PATH} ${SSH_USER}@${MINIKUBE_PUBLIC_IP}
 kubectl get all -n ${namespace} -l app=${appName}
 kubectl get pods -n ${namespace} -l app=${appName}
 kubectl logs -n ${namespace} -l app=${appName}
@@ -647,7 +640,7 @@ kubectl get events -n ${namespace} --sort-by='.lastTimestamp'
 ❌ Pipeline failed!
 
 🔍 Troubleshooting Commands (via SSH):
-ssh -i your-key.pem ${SSH_USER}@${MINIKUBE_PUBLIC_IP}
+ssh -i ${params.SSH_KEY_FILE_PATH} ${SSH_USER}@${MINIKUBE_PUBLIC_IP}
 
 kubectl get pods -n ${namespace} -l app=${appName}
 kubectl logs -n ${namespace} -l app=${appName}
@@ -656,7 +649,7 @@ kubectl get events -n ${namespace} --sort-by='.lastTimestamp'
 
 🚨 Common Issues:
 1. Check if Minikube cluster is running: minikube status
-2. Verify SSH key permissions: chmod 600 your-key.pem  
+2. Verify SSH key permissions: chmod 600 ${params.SSH_KEY_FILE_PATH}
 3. Check security groups allow SSH (port 22)
 4. Verify Docker registry credentials
 5. Ensure sufficient resources on Minikube node
@@ -666,6 +659,7 @@ kubectl get events -n ${namespace} --sort-by='.lastTimestamp'
 • Git Commit: ${env.GIT_COMMIT_SHORT ?: 'unknown'}
 • Image Tag: ${env.IMAGE_TAG ?: 'unknown'}
 • Target IP: ${MINIKUBE_PUBLIC_IP}
+• SSH Key: ${params.SSH_KEY_FILE_PATH}
 """
             }
         }
