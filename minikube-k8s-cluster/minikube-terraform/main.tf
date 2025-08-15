@@ -334,7 +334,7 @@ EOF
     type        = "ssh"
     user        = "ubuntu"
     host        = self.public_ip
-    private_key = file(var.ssh_private_key_path)
+    private_key = tls_private_key.minikube_key.private_key_pem
     timeout     = "30m"
   }
 
