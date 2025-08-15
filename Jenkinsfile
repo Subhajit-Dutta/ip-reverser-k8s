@@ -35,12 +35,12 @@ pipeline {
     parameters {
         string(
             name: 'SSH_KEY_FILE_PATH',
-            defaultValue: '/home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem',
+            defaultValue: '/RAM/Jane/sita/jane/jane/hanuman/ramayan/katha',
             description: '🔐 Full path to SSH private key file on Jenkins agent'
         )
         string(
             name: 'MINIKUBE_PUBLIC_IP',
-            defaultValue: '52.42.72.58',
+            defaultValue: '8.8.8.8',
             description: '🌐 Minikube EC2 instance public IP address'
         )
         string(
