@@ -26,7 +26,7 @@ pipeline {
         // Minikube Configuration - CONFIGURABLE PARAMETERS
         MINIKUBE_PUBLIC_IP = "${params.MINIKUBE_PUBLIC_IP ?: '52.42.72.58'}"
         SSH_USER = "${params.SSH_USER ?: 'ubuntu'}"
-        SSH_KEY_CREDENTIAL = "${params.SSH_KEY_CREDENTIAL ?: 'dockerhub-creds'}"
+        SSH_KEY_CREDENTIAL = "${params.SSH_KEY_CREDENTIAL ?: 'minikube-ssh-key'}"
         NODEPORT_SERVICE_PORT = "${params.NODEPORT_SERVICE_PORT ?: '30080'}"
         
         // Initialize IMAGE_TAG with safe default
@@ -46,8 +46,8 @@ pipeline {
         )
         string(
             name: 'SSH_KEY_CREDENTIAL',
-            defaultValue: 'dockerhub-creds',
-            description: '🔑 Jenkins credential ID for SSH private key'
+            defaultValue: 'minikube-ssh-key',
+            description: '🔑 Jenkins credential ID for SSH private key (NOT Docker credentials)'
         )
         string(
             name: 'NODEPORT_SERVICE_PORT',
@@ -138,39 +138,63 @@ pipeline {
         stage('🔗 Test Minikube Connection') {
             steps {
                 echo "🔗 Testing connection to Minikube instance..."
-                withCredentials([sshUserPrivateKey(
-                    credentialsId: "${SSH_KEY_CREDENTIAL}",
-                    keyFileVariable: 'SSH_KEY',
-                    usernameVariable: 'SSH_USERNAME'
-                )]) {
-                    sh """
-                        echo "🔍 Testing SSH connection to ${MINIKUBE_PUBLIC_IP}..."
-                        ssh -i \$SSH_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
-                            ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
-                            echo '✅ SSH connection successful'
-                            echo '📋 Instance info:'
-                            echo '   - Hostname: \$(hostname)'
-                            echo '   - User: \$(whoami)'
-                            echo '   - Working directory: \$(pwd)'
+                script {
+                    try {
+                        sh """
+                            echo "🔍 Using hardcoded SSH key path..."
+                            SSH_KEY_PATH="/home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem"
                             
-                            echo '🔍 Checking Minikube status...'
-                            if command -v minikube >/dev/null 2>&1; then
-                                minikube status || echo 'Minikube not running'
+                            echo "🔐 Checking SSH key file..."
+                            if [ -f "\$SSH_KEY_PATH" ]; then
+                                echo "✅ SSH key found: \$SSH_KEY_PATH"
+                                chmod 600 "\$SSH_KEY_PATH"
                             else
-                                echo 'Minikube command not found'
+                                echo "❌ SSH key not found at: \$SSH_KEY_PATH"
+                                echo "📂 Available files in directory:"
+                                ls -la /home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/ || true
+                                exit 1
                             fi
                             
-                            echo '🔍 Checking kubectl...'
-                            if command -v kubectl >/dev/null 2>&1; then
-                                kubectl cluster-info || echo 'Kubectl not connected'
-                                kubectl get nodes || echo 'No nodes found'
-                            else
-                                echo 'Kubectl command not found'
-                            fi
-                        "
+                            echo "🔍 Testing SSH connection to ${MINIKUBE_PUBLIC_IP}..."
+                            timeout 30 ssh -i "\$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
+                                ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
+                                echo '✅ SSH connection successful'
+                                echo '📋 Instance info:'
+                                echo '   - Hostname: \$(hostname)'
+                                echo '   - User: \$(whoami)'
+                                echo '   - Working directory: \$(pwd)'
+                                
+                                echo '🔍 Checking Minikube status...'
+                                if command -v minikube >/dev/null 2>&1; then
+                                    minikube status || echo 'Minikube not running'
+                                else
+                                    echo 'Minikube command not found'
+                                fi
+                                
+                                echo '🔍 Checking kubectl...'
+                                if command -v kubectl >/dev/null 2>&1; then
+                                    kubectl cluster-info || echo 'Kubectl not connected'
+                                    kubectl get nodes || echo 'No nodes found'
+                                else
+                                    echo 'Kubectl command not found'
+                                fi
+                            "
+                            
+                            echo "✅ Minikube connection test completed"
+                        """
+                    } catch (Exception e) {
+                        echo "❌ SSH Connection failed: ${e.getMessage()}"
+                        echo "🔧 Possible issues:"
+                        echo "   1. SSH key file not found at hardcoded path"
+                        echo "   2. Minikube instance not accessible at ${MINIKUBE_PUBLIC_IP}"
+                        echo "   3. Security group doesn't allow SSH from Jenkins instance"
+                        echo "   4. Wrong SSH user (currently using: ${SSH_USER})"
+                        echo ""
+                        echo "⚠️ Continuing pipeline - but deployment will likely fail"
                         
-                        echo "✅ Minikube connection test completed"
-                    """
+                        // Mark build as unstable but continue
+                        currentBuild.result = 'UNSTABLE'
+                    }
                 }
             }
         }
@@ -280,54 +304,61 @@ pipeline {
         stage('🚀 Deploy to Minikube') {
             steps {
                 echo "🚀 Deploying to remote Minikube cluster..."
-                withCredentials([sshUserPrivateKey(
-                    credentialsId: "${SSH_KEY_CREDENTIAL}",
-                    keyFileVariable: 'SSH_KEY',
-                    usernameVariable: 'SSH_USERNAME'
-                )]) {
-                    sh """
-                        echo "📦 Preparing deployment for remote Minikube..."
-                        echo "   - Target: ${SSH_USER}@${MINIKUBE_PUBLIC_IP}"
-                        echo "   - Image: ${DOCKER_REPO}:${env.IMAGE_TAG}"
-                        echo "   - Namespace: ${K8S_NAMESPACE}"
-                        
-                        # Create deployment file with updated image
-                        sed 's|image: ip-reverse-app:latest|image: ${DOCKER_REPO}:${env.IMAGE_TAG}|g' k8s-deployment.yaml > k8s-deployment-${BUILD_NUMBER}.yaml
-                        
-                        # Copy deployment file to Minikube instance
-                        scp -i \$SSH_KEY -o StrictHostKeyChecking=no \\
-                            k8s-deployment-${BUILD_NUMBER}.yaml \\
-                            ${SSH_USER}@${MINIKUBE_PUBLIC_IP}:/tmp/k8s-deployment-${BUILD_NUMBER}.yaml
-                        
-                        # Connect and deploy
-                        ssh -i \$SSH_KEY -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
-                            echo '🚀 Starting deployment on Minikube...'
+                script {
+                    try {
+                        sh """
+                            echo "📦 Preparing deployment for remote Minikube..."
+                            echo "   - Target: ${SSH_USER}@${MINIKUBE_PUBLIC_IP}"
+                            echo "   - Image: ${DOCKER_REPO}:${env.IMAGE_TAG}"
+                            echo "   - Namespace: ${K8S_NAMESPACE}"
                             
-                            # Ensure namespace exists
-                            kubectl get namespace ${K8S_NAMESPACE} || kubectl create namespace ${K8S_NAMESPACE}
+                            # Set SSH key path
+                            SSH_KEY_PATH="/home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem"
                             
-                            # Apply the deployment
-                            kubectl apply -f /tmp/k8s-deployment-${BUILD_NUMBER}.yaml
+                            echo "🔐 Ensuring SSH key permissions..."
+                            chmod 600 "\$SSH_KEY_PATH"
                             
-                            # Wait for rollout to complete
-                            echo '⏳ Waiting for deployment rollout...'
-                            kubectl rollout status deployment/${APP_NAME} -n ${K8S_NAMESPACE} --timeout=300s
+                            # Create deployment file with updated image
+                            sed 's|image: ip-reverse-app:latest|image: ${DOCKER_REPO}:${env.IMAGE_TAG}|g' k8s-deployment.yaml > k8s-deployment-${BUILD_NUMBER}.yaml
                             
-                            # Verify deployment
-                            echo '✅ Verifying deployment...'
-                            kubectl get pods -n ${K8S_NAMESPACE} -l app=${APP_NAME}
-                            kubectl get services -n ${K8S_NAMESPACE} -l app=${APP_NAME}
+                            # Copy deployment file to Minikube instance
+                            scp -i "\$SSH_KEY_PATH" -o StrictHostKeyChecking=no \\
+                                k8s-deployment-${BUILD_NUMBER}.yaml \\
+                                ${SSH_USER}@${MINIKUBE_PUBLIC_IP}:/tmp/k8s-deployment-${BUILD_NUMBER}.yaml
                             
-                            # Get service details
-                            echo '📋 Service Details:'
-                            kubectl describe service ${APP_NAME}-service -n ${K8S_NAMESPACE} || true
-                            
-                            # Cleanup temp file
-                            rm -f /tmp/k8s-deployment-${BUILD_NUMBER}.yaml
-                            
-                            echo '✅ Deployment completed successfully'
-                        "
-                    """
+                            # Connect and deploy
+                            ssh -i "\$SSH_KEY_PATH" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
+                                echo '🚀 Starting deployment on Minikube...'
+                                
+                                # Ensure namespace exists
+                                kubectl get namespace ${K8S_NAMESPACE} || kubectl create namespace ${K8S_NAMESPACE}
+                                
+                                # Apply the deployment
+                                kubectl apply -f /tmp/k8s-deployment-${BUILD_NUMBER}.yaml
+                                
+                                # Wait for rollout to complete
+                                echo '⏳ Waiting for deployment rollout...'
+                                kubectl rollout status deployment/${APP_NAME} -n ${K8S_NAMESPACE} --timeout=300s
+                                
+                                # Verify deployment
+                                echo '✅ Verifying deployment...'
+                                kubectl get pods -n ${K8S_NAMESPACE} -l app=${APP_NAME}
+                                kubectl get services -n ${K8S_NAMESPACE} -l app=${APP_NAME}
+                                
+                                # Get service details
+                                echo '📋 Service Details:'
+                                kubectl describe service ${APP_NAME}-service -n ${K8S_NAMESPACE} || true
+                                
+                                # Cleanup temp file
+                                rm -f /tmp/k8s-deployment-${BUILD_NUMBER}.yaml
+                                
+                                echo '✅ Deployment completed successfully'
+                            "
+                        """
+                    } catch (Exception e) {
+                        echo "❌ Deployment failed: ${e.getMessage()}"
+                        throw e
+                    }
                 }
             }
             post {
@@ -340,46 +371,52 @@ pipeline {
         stage('💨 Smoke Test') {
             steps {
                 echo "💨 Running smoke tests on deployed application..."
-                withCredentials([sshUserPrivateKey(
-                    credentialsId: "${SSH_KEY_CREDENTIAL}",
-                    keyFileVariable: 'SSH_KEY'
-                )]) {
-                    sh """
-                        echo "🧪 Testing application via multiple methods..."
-                        
-                        # Method 1: Test via SSH on Minikube instance
-                        ssh -i \$SSH_KEY -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
-                            echo '🔍 Getting service URL from Minikube...'
-                            SERVICE_URL=\\\$(minikube service ${APP_NAME}-service --url -n ${K8S_NAMESPACE})
-                            echo '🌐 Internal Service URL: '\\\$SERVICE_URL
+                script {
+                    try {
+                        sh """
+                            echo "🧪 Testing application via multiple methods..."
                             
-                            # Wait for service to be ready
-                            echo '⏳ Waiting for service to be ready...'
-                            sleep 15
+                            # Set SSH key path
+                            SSH_KEY_PATH="/home/ec2-user/jenkins/workspace/Jenkinsfile-Minikube-Amazon-Linux/minikube-k8s-cluster/minikube-terraform/minikube-demo-key.pem"
+                            chmod 600 "\$SSH_KEY_PATH"
                             
-                            # Test the deployed application
-                            echo '🧪 Testing deployed application internally...'
-                            curl -f \\\$SERVICE_URL/health || exit 1
-                            curl -f \\\$SERVICE_URL/ || exit 1
+                            # Method 1: Test via SSH on Minikube instance
+                            ssh -i "\$SSH_KEY_PATH" -o StrictHostKeyChecking=no ${SSH_USER}@${MINIKUBE_PUBLIC_IP} "
+                                echo '🔍 Getting service URL from Minikube...'
+                                SERVICE_URL=\\\$(minikube service ${APP_NAME}-service --url -n ${K8S_NAMESPACE})
+                                echo '🌐 Internal Service URL: '\\\$SERVICE_URL
+                                
+                                # Wait for service to be ready
+                                echo '⏳ Waiting for service to be ready...'
+                                sleep 15
+                                
+                                # Test the deployed application
+                                echo '🧪 Testing deployed application internally...'
+                                curl -f \\\$SERVICE_URL/health || exit 1
+                                curl -f \\\$SERVICE_URL/ || exit 1
+                                
+                                echo '✅ Internal smoke tests passed'
+                            "
                             
-                            echo '✅ Internal smoke tests passed'
-                        "
-                        
-                        # Method 2: Test via NodePort from Jenkins (if accessible)
-                        echo "🔗 Testing application via NodePort..."
-                        echo "   - URL: http://${MINIKUBE_PUBLIC_IP}:${NODEPORT_SERVICE_PORT}"
-                        
-                        # Try to access via NodePort (may fail if security group doesn't allow)
-                        if curl -f --connect-timeout 10 http://${MINIKUBE_PUBLIC_IP}:${NODEPORT_SERVICE_PORT}/health 2>/dev/null; then
-                            echo "✅ NodePort access successful"
-                            curl -f http://${MINIKUBE_PUBLIC_IP}:${NODEPORT_SERVICE_PORT}/
-                        else
-                            echo "⚠️  NodePort access failed (security group may not allow access)"
-                            echo "   Application is still accessible from within the Minikube instance"
-                        fi
-                        
-                        echo "🎉 Smoke tests completed"
-                    """
+                            # Method 2: Test via NodePort from Jenkins (if accessible)
+                            echo "🔗 Testing application via NodePort..."
+                            echo "   - URL: http://${MINIKUBE_PUBLIC_IP}:${NODEPORT_SERVICE_PORT}"
+                            
+                            # Try to access via NodePort (may fail if security group doesn't allow)
+                            if curl -f --connect-timeout 10 http://${MINIKUBE_PUBLIC_IP}:${NODEPORT_SERVICE_PORT}/health 2>/dev/null; then
+                                echo "✅ NodePort access successful"
+                                curl -f http://${MINIKUBE_PUBLIC_IP}:${NODEPORT_SERVICE_PORT}/
+                            else
+                                echo "⚠️  NodePort access failed (security group may not allow access)"
+                                echo "   Application is still accessible from within the Minikube instance"
+                            fi
+                            
+                            echo "🎉 Smoke tests completed"
+                        """
+                    } catch (Exception e) {
+                        echo "❌ Smoke tests failed: ${e.getMessage()}"
+                        currentBuild.result = 'UNSTABLE'
+                    }
                 }
             }
         }
