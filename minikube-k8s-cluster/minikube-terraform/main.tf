@@ -279,7 +279,7 @@ resource "aws_instance" "minikube_instance" {
   user_data = base64encode(<<-EOF
 #!/bin/bash
 apt-get update
-apt-get install -y awscli
+apt-get install -y awscli python3 python3-pip
 
 # Create a marker that instance is ready for provisioning
 echo "Instance ready for provisioning" > /tmp/instance-ready
@@ -318,40 +318,44 @@ EOF
     }
   }
 
-	# Copy the minikube setup script
-	provisioner "file" {
-	  content = templatefile("${path.module}/minikube-setup.sh", {
-		cluster_name       = var.cluster_name
-		environment        = var.environment
-		minikube_version   = var.minikube_version
-		kubernetes_version = var.kubernetes_version
-		minikube_driver    = var.minikube_driver
-		minikube_memory    = var.minikube_memory
-		minikube_cpus      = var.minikube_cpus
-	  })
-	  destination = "/tmp/minikube-setup.sh"
+  # Copy the Python-based minikube setup script
+  provisioner "file" {
+    content = templatefile("${path.module}/minikube-setup.sh", {
+      cluster_name       = var.cluster_name
+      environment        = var.environment
+      minikube_version   = var.minikube_version
+      kubernetes_version = var.kubernetes_version
+      minikube_driver    = var.minikube_driver
+      minikube_memory    = var.minikube_memory
+      minikube_cpus      = var.minikube_cpus
+    })
+    destination = "/tmp/minikube-setup.sh"
 
-	  connection {
-		type        = "ssh"
-		user        = "ubuntu"
-		private_key = tls_private_key.minikube_key.private_key_pem
-		host        = self.public_ip
-		timeout     = "5m"
-	  }
-	}
+    connection {
+      type        = "ssh"
+      user        = "ubuntu"
+      private_key = tls_private_key.minikube_key.private_key_pem
+      host        = self.public_ip
+      timeout     = "5m"
+    }
+  }
 
-  # Execute the minikube setup script
+  # Execute the Python-based minikube setup script
   provisioner "remote-exec" {
     inline = [
       "chmod +x /tmp/minikube-setup.sh",
+      "echo 'Starting Python-based Minikube setup...'",
       "sudo /tmp/minikube-setup.sh 2>&1 | tee /tmp/minikube-setup.log",
       # Wait for the success marker with extended timeout
-      "timeout 1200 bash -c 'until [ -f /tmp/minikube-ready ]; do echo \"Waiting for Minikube setup to complete...\"; sleep 30; done'",
-      "cat /tmp/minikube-ready",
-      "echo '✅ Minikube setup completed successfully'",
+      "echo 'Waiting for Minikube setup to complete...'",
+      "timeout 1500 bash -c 'until [ -f /tmp/minikube-ready ]; do echo \"Still waiting for Minikube setup...\"; sleep 30; done'",
+      "if [ -f /tmp/minikube-ready ]; then echo '✅ Success marker found'; cat /tmp/minikube-ready; else echo '❌ Setup timeout or failed'; exit 1; fi",
+      "echo '🎉 Minikube setup completed successfully'",
       # Verify minikube is actually running
-      "sudo -u ubuntu minikube status",
-      "sudo -u ubuntu kubectl get nodes"
+      "echo 'Verifying Minikube status...'",
+      "sudo -i -u ubuntu minikube status",
+      "sudo -i -u ubuntu kubectl get nodes",
+      "echo '✅ All verifications passed!'"
     ]
 
     connection {
@@ -359,7 +363,7 @@ EOF
       user        = "ubuntu"
       private_key = tls_private_key.minikube_key.private_key_pem
       host        = self.public_ip
-      timeout     = "25m"  # Extended timeout for minikube setup
+      timeout     = "30m"  # Extended timeout for Python setup
     }
   }
 }

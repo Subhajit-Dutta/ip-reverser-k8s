@@ -1,267 +1,176 @@
 #!/bin/bash
 
-# Minikube Setup Script for AWS EC2 - VERSION 9 (QUOTE FIXED)
-# This script eliminates all template conflicts and quote issues
+# Minikube Setup Script - Python Wrapper
+# This eliminates ALL bash templating issues by using Python
 
 set -e
 
-# Logging
-exec > >(tee /var/log/minikube-setup.log)
-exec 2>&1
+echo "Starting Minikube setup using Python approach..."
 
-echo "Starting Minikube setup at $(date)"
-
-# Variables from Terraform
-echo "Cluster Name: ${cluster_name}"
-echo "Environment: ${environment}"
-echo "Minikube Version: ${minikube_version}"
-echo "Kubernetes Version: ${kubernetes_version}"
-echo "Minikube Driver: ${minikube_driver}"
-echo "Minikube Memory: ${minikube_memory}"
-echo "Minikube CPUs: ${minikube_cpus}"
-
-# Get instance metadata
-PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
-PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-
-echo "Instance Private IP: $PRIVATE_IP"
-echo "Instance Public IP: $PUBLIC_IP"
-
-# Update system
-echo "Updating system packages..."
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get upgrade -y
-
-# Install essential packages
-echo "Installing essential packages..."
-apt-get install -y \
-    apt-transport-https \
-    ca-certificates \
-    curl \
-    gnupg \
-    lsb-release \
-    unzip \
-    jq \
-    conntrack \
-    socat
-
-# Install Docker
-echo "Installing Docker..."
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io
-
-# Configure Docker
-systemctl enable docker
-systemctl start docker
-usermod -aG docker ubuntu
-
-# Wait for Docker to be ready
-echo "Waiting for Docker daemon to be fully ready..."
-sleep 10
-
-# Fix Docker socket permissions
-chmod 666 /var/run/docker.sock
-chown root:docker /var/run/docker.sock
-
-# Verify Docker
-if ! systemctl is-active docker >/dev/null; then
-    echo "ERROR: Docker service is not running"
-    exit 1
+# Install Python if not present
+if ! command -v python3 &> /dev/null; then
+    echo "Installing Python3..."
+    apt-get update -y
+    apt-get install -y python3 python3-pip
 fi
 
-echo "Docker configuration completed successfully"
+# Create the Python setup script
+cat > /tmp/minikube_setup.py << 'EOF'
+#!/usr/bin/env python3
+import os, sys, subprocess, time, json, logging
+from pathlib import Path
 
-# Configure Docker daemon for Minikube
-mkdir -p /etc/docker
-cat <<DOCKEREOF > /etc/docker/daemon.json
-{
-  "exec-opts": ["native.cgroupdriver=systemd"],
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "100m"
-  },
-  "storage-driver": "overlay2",
-  "insecure-registries": ["10.96.0.0/12", "192.168.0.0/16"]
-}
-DOCKEREOF
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
+                   handlers=[logging.FileHandler('/var/log/minikube-setup.log'), logging.StreamHandler(sys.stdout)])
+logger = logging.getLogger(__name__)
 
-systemctl daemon-reload
-systemctl restart docker
-sleep 10
+class MinikubeSetup:
+    def __init__(self):
+        self.cluster_name = sys.argv[1] if len(sys.argv) > 1 else "minikube-demo"
+        self.environment = sys.argv[2] if len(sys.argv) > 2 else "demo"
+        self.minikube_version = sys.argv[3] if len(sys.argv) > 3 else "v1.32.0"
+        self.kubernetes_version = sys.argv[4] if len(sys.argv) > 4 else "v1.28.3"
+        self.minikube_driver = sys.argv[5] if len(sys.argv) > 5 else "docker"
+        self.minikube_memory = sys.argv[6] if len(sys.argv) > 6 else "3900"
+        self.minikube_cpus = sys.argv[7] if len(sys.argv) > 7 else "2"
+        self.ubuntu_home = "/home/ubuntu"
+        self.minikube_home = f"{self.ubuntu_home}/.minikube"
+        self.kube_config = f"{self.ubuntu_home}/.kube/config"
+        logger.info(f"Starting setup for {self.cluster_name}")
 
-# Install kubectl
-echo "Installing kubectl..."
-curl -LO "https://dl.k8s.io/release/${kubernetes_version}/bin/linux/amd64/kubectl"
-chmod +x kubectl
-mv kubectl /usr/local/bin/
+    def run_cmd(self, cmd, check=True, user=None):
+        if isinstance(cmd, str): cmd = cmd.split()
+        if user == "ubuntu":
+            env = {'HOME': self.ubuntu_home, 'MINIKUBE_HOME': self.minikube_home, 'KUBECONFIG': self.kube_config, 
+                   'CHANGE_MINIKUBE_NONE_USER': 'true', 'PATH': '/usr/local/bin:/usr/bin:/bin'}
+            cmd = ['sudo', '-i', '-u', 'ubuntu'] + cmd
+        else: env = os.environ.copy()
+        try:
+            logger.info(f"Running: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=check, capture_output=True, text=True, env=env)
+            if result.stdout: logger.info(f"Output: {result.stdout.strip()}")
+            return result
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Command failed: {e}")
+            if check: raise
+            return e
 
-# Install Minikube
-echo "Installing Minikube ${minikube_version}..."
-curl -LO "https://storage.googleapis.com/minikube/releases/${minikube_version}/minikube-linux-amd64"
-chmod +x minikube-linux-amd64
-mv minikube-linux-amd64 /usr/local/bin/minikube
+    def get_metadata(self):
+        try:
+            private_ip = subprocess.run(['curl', '-s', 'http://169.254.169.254/latest/meta-data/local-ipv4'], 
+                                      capture_output=True, text=True, timeout=10).stdout.strip()
+            public_ip = subprocess.run(['curl', '-s', 'http://169.254.169.254/latest/meta-data/public-ipv4'], 
+                                     capture_output=True, text=True, timeout=10).stdout.strip()
+            instance_type = subprocess.run(['curl', '-s', 'http://169.254.169.254/latest/meta-data/instance-type'], 
+                                         capture_output=True, text=True, timeout=10).stdout.strip()
+            logger.info(f"Metadata: {private_ip}, {public_ip}, {instance_type}")
+            return private_ip, public_ip, instance_type
+        except: return "unknown", "unknown", "unknown"
 
-# Install crictl
-echo "Installing crictl..."
-CRICTL_VERSION="v1.28.0"
-curl -L "https://github.com/kubernetes-sigs/cri-tools/releases/download/$CRICTL_VERSION/crictl-$CRICTL_VERSION-linux-amd64.tar.gz" | tar -C /usr/local/bin -xz
+    def update_system(self):
+        logger.info("Updating system...")
+        os.environ['DEBIAN_FRONTEND'] = 'noninteractive'
+        self.run_cmd("apt-get update -y")
+        self.run_cmd("apt-get upgrade -y")
+        self.run_cmd("apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release unzip jq conntrack socat")
 
-# Configure system for Minikube
-echo "Configuring system for Minikube..."
-swapoff -a
-sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+    def install_docker(self):
+        logger.info("Installing Docker...")
+        subprocess.run(["bash", "-c", "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg"])
+        lsb = subprocess.run(['lsb_release', '-cs'], capture_output=True, text=True).stdout.strip()
+        with open('/etc/apt/sources.list.d/docker.list', 'w') as f:
+            f.write(f"deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {lsb} stable\n")
+        self.run_cmd("apt-get update -y")
+        self.run_cmd("apt-get install -y docker-ce docker-ce-cli containerd.io")
+        self.run_cmd("systemctl enable docker")
+        self.run_cmd("systemctl start docker")
+        self.run_cmd("usermod -aG docker ubuntu")
+        time.sleep(10)
+        self.run_cmd("chmod 666 /var/run/docker.sock")
+        self.run_cmd("chown root:docker /var/run/docker.sock")
+        os.makedirs('/etc/docker', exist_ok=True)
+        with open('/etc/docker/daemon.json', 'w') as f:
+            json.dump({"exec-opts": ["native.cgroupdriver=systemd"], "log-driver": "json-file", 
+                      "log-opts": {"max-size": "100m"}, "storage-driver": "overlay2", 
+                      "insecure-registries": ["10.96.0.0/12", "192.168.0.0/16"]}, f, indent=2)
+        self.run_cmd("systemctl daemon-reload")
+        self.run_cmd("systemctl restart docker")
+        time.sleep(10)
 
-modprobe br_netfilter
-echo 'br_netfilter' >> /etc/modules-load.d/minikube.conf
+    def install_k8s_tools(self):
+        logger.info("Installing Kubernetes tools...")
+        self.run_cmd(f"curl -LO https://dl.k8s.io/release/{self.kubernetes_version}/bin/linux/amd64/kubectl")
+        self.run_cmd("chmod +x kubectl")
+        self.run_cmd("mv kubectl /usr/local/bin/")
+        self.run_cmd(f"curl -LO https://storage.googleapis.com/minikube/releases/{self.minikube_version}/minikube-linux-amd64")
+        self.run_cmd("chmod +x minikube-linux-amd64")
+        self.run_cmd("mv minikube-linux-amd64 /usr/local/bin/minikube")
+        self.run_cmd(["bash", "-c", "curl -L https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.28.0/crictl-v1.28.0-linux-amd64.tar.gz | tar -C /usr/local/bin -xz"])
 
-cat <<SYSCTLEOF > /etc/sysctl.d/minikube.conf
-net.bridge.bridge-nf-call-iptables  = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward                 = 1
-SYSCTLEOF
+    def configure_system(self):
+        logger.info("Configuring system...")
+        self.run_cmd("swapoff -a")
+        self.run_cmd("sed -i '/ swap / s/^\\(.*\\)$/#\\1/g' /etc/fstab")
+        self.run_cmd("modprobe br_netfilter")
+        Path('/etc/modules-load.d').mkdir(exist_ok=True)
+        with open('/etc/modules-load.d/minikube.conf', 'w') as f: f.write('br_netfilter\n')
+        with open('/etc/sysctl.d/minikube.conf', 'w') as f:
+            f.write("net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n")
+        self.run_cmd("sysctl --system")
 
-sysctl --system
+    def start_minikube(self):
+        logger.info("Starting Minikube...")
+        Path(self.minikube_home).mkdir(parents=True, exist_ok=True)
+        Path(f"{self.ubuntu_home}/.kube").mkdir(parents=True, exist_ok=True)
+        self.run_cmd(f"chown -R ubuntu:ubuntu {self.ubuntu_home}/.minikube")
+        self.run_cmd(f"chown -R ubuntu:ubuntu {self.ubuntu_home}/.kube")
+        
+        # Test Docker
+        if self.run_cmd("docker ps", check=False, user="ubuntu").returncode != 0:
+            self.run_cmd("chmod 666 /var/run/docker.sock")
+            self.run_cmd("docker ps", user="ubuntu")
+        
+        # Get resources
+        mem_output = subprocess.run(['free', '-m'], capture_output=True, text=True)
+        total_mem = int(mem_output.stdout.split('\n')[1].split()[1])
+        cpu_cores = int(subprocess.run(['nproc'], capture_output=True, text=True).stdout.strip())
+        
+        # Calculate resources
+        req_mem, req_cpus = int(self.minikube_memory), int(self.minikube_cpus)
+        minikube_mem = req_mem if total_mem >= req_mem else total_mem - 512
+        minikube_cpus = req_cpus if cpu_cores >= req_cpus else cpu_cores
+        
+        logger.info(f"Starting with {minikube_mem}MB memory and {minikube_cpus} CPUs")
+        
+        # Start Minikube
+        cmd = ["minikube", "start", f"--driver={self.minikube_driver}", f"--memory={minikube_mem}", 
+               f"--cpus={minikube_cpus}", f"--kubernetes-version={self.kubernetes_version}", 
+               "--delete-on-failure", "--force", "--wait=true", "--wait-timeout=600s", "--v=3"]
+        
+        result = self.run_cmd(cmd, user="ubuntu")
+        if result.returncode != 0:
+            self.run_cmd("minikube logs", check=False, user="ubuntu")
+            raise Exception("Minikube startup failed")
+        
+        self.run_cmd("minikube status", user="ubuntu")
+        self.run_cmd("kubectl get nodes", user="ubuntu")
+        
+        # Wait for ready
+        for i in range(30):
+            result = self.run_cmd("kubectl get nodes", check=False, user="ubuntu")
+            if "Ready" in result.stdout: break
+            time.sleep(10)
 
-# Create configuration files for the startup script
-echo "${minikube_memory}" > /tmp/minikube-memory
-echo "${minikube_cpus}" > /tmp/minikube-cpus
-echo "${minikube_driver}" > /tmp/minikube-driver
-echo "${kubernetes_version}" > /tmp/minikube-k8s-version
+    def enable_addons(self):
+        logger.info("Enabling addons...")
+        for addon in ["storage-provisioner", "default-storageclass"]:
+            self.run_cmd(f"minikube addons enable {addon}", user="ubuntu")
+        for addon in ["dashboard", "metrics-server"]:
+            self.run_cmd(f"minikube addons enable {addon}", check=False, user="ubuntu")
 
-# Create startup script directly without base64 encoding
-cat > /tmp/start-minikube.sh << 'SCRIPT_END'
-#!/bin/bash
-set -e
-
-export MINIKUBE_HOME=/home/ubuntu/.minikube
-export KUBECONFIG=/home/ubuntu/.kube/config
-export CHANGE_MINIKUBE_NONE_USER=true
-
-echo "Starting Minikube as ubuntu user..."
-echo "Current user: $(whoami)"
-echo "Home directory: $HOME"
-
-# Set up directories
-mkdir -p /home/ubuntu/.minikube
-mkdir -p /home/ubuntu/.kube
-chown -R ubuntu:ubuntu /home/ubuntu/.minikube
-chown -R ubuntu:ubuntu /home/ubuntu/.kube
-
-# Test Docker access
-echo "Testing Docker access..."
-if ! docker ps >/dev/null 2>&1; then
-    echo "Docker access failed, attempting to fix..."
-    sudo chmod 666 /var/run/docker.sock
-    if ! docker ps >/dev/null 2>&1; then
-        echo "Docker access still failing"
-        exit 1
-    fi
-fi
-echo "Docker access confirmed"
-
-# Get system resources and read configuration from files
-TOTAL_MEM=$(free -m | grep Mem | awk '{print $2}')
-CPU_CORES=$(nproc)
-REQUESTED_MEM=$(cat /tmp/minikube-memory)
-REQUESTED_CPUS=$(cat /tmp/minikube-cpus)
-DRIVER=$(cat /tmp/minikube-driver)
-K8S_VERSION=$(cat /tmp/minikube-k8s-version)
-
-echo "System resources:"
-echo "  Total Memory: ${TOTAL_MEM}MB"
-echo "  CPU Cores: ${CPU_CORES}"
-echo "  Requested Memory: ${REQUESTED_MEM}MB"
-echo "  Requested CPUs: ${REQUESTED_CPUS}"
-
-# Calculate appropriate resources
-MINIKUBE_MEM=$REQUESTED_MEM
-MINIKUBE_CPUS=$REQUESTED_CPUS
-
-if [ $TOTAL_MEM -lt $REQUESTED_MEM ]; then
-    MINIKUBE_MEM=$((TOTAL_MEM - 512))
-    echo "Adjusting memory to ${MINIKUBE_MEM}MB"
-fi
-
-if [ $CPU_CORES -lt $REQUESTED_CPUS ]; then
-    MINIKUBE_CPUS=$CPU_CORES
-    echo "Adjusting CPUs to ${MINIKUBE_CPUS}"
-fi
-
-echo "Starting Minikube with:"
-echo "  Memory: ${MINIKUBE_MEM}MB"
-echo "  CPUs: ${MINIKUBE_CPUS}"
-echo "  Driver: ${DRIVER}"
-echo "  Kubernetes: ${K8S_VERSION}"
-
-# Start Minikube
-if minikube start \
-    --driver=$DRIVER \
-    --memory=$MINIKUBE_MEM \
-    --cpus=$MINIKUBE_CPUS \
-    --kubernetes-version=$K8S_VERSION \
-    --delete-on-failure \
-    --force \
-    --wait=true \
-    --wait-timeout=600s \
-    --v=3; then
-    echo "Minikube started successfully"
-else
-    echo "Minikube start failed"
-    minikube logs || echo "No logs available"
-    exit 1
-fi
-
-# Verify cluster
-echo "Verifying cluster..."
-minikube status
-kubectl get nodes
-
-# Wait for cluster to be ready
-echo "Waiting for cluster readiness..."
-timeout 300 bash -c 'until kubectl get nodes | grep -q "Ready"; do echo "Waiting..."; sleep 10; done'
-
-# Enable addons
-echo "Enabling addons..."
-minikube addons enable storage-provisioner || true
-minikube addons enable default-storageclass || true
-minikube addons enable dashboard || echo "Dashboard failed"
-minikube addons enable metrics-server || echo "Metrics-server failed"
-
-echo "Minikube setup completed successfully!"
-SCRIPT_END
-
-chmod +x /tmp/start-minikube.sh
-
-# Run the Minikube setup as ubuntu user
-echo "Starting Minikube cluster..."
-sudo -i -u ubuntu /tmp/start-minikube.sh
-
-# Verify installation
-echo "Final verification..."
-sudo -i -u ubuntu bash -c '
-export MINIKUBE_HOME=/home/ubuntu/.minikube
-export KUBECONFIG=/home/ubuntu/.kube/config
-
-if minikube status >/dev/null 2>&1; then
-    echo "✅ Minikube verification successful"
-    minikube status
-else
-    echo "❌ Minikube verification failed"
-    exit 1
-fi
-'
-
-# Create Jenkins service account
-echo "Creating Jenkins service account..."
-sudo -i -u ubuntu bash -c '
-export KUBECONFIG=/home/ubuntu/.kube/config
-
-kubectl apply -f - <<JENKINSEOF
-apiVersion: v1
+    def create_rbac(self):
+        logger.info("Creating Jenkins RBAC...")
+        rbac = """apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: jenkins-deployer
@@ -278,73 +187,64 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: jenkins-deployer
-  namespace: default
-JENKINSEOF
-'
+  namespace: default"""
+        with open('/tmp/jenkins-rbac.yaml', 'w') as f: f.write(rbac)
+        self.run_cmd("kubectl apply -f /tmp/jenkins-rbac.yaml", user="ubuntu")
 
-# Create cluster info file
-cat <<INFOEOF > /home/ubuntu/cluster-info.txt
-Minikube Cluster Information
+    def create_files(self):
+        private_ip, public_ip, instance_type = self.get_metadata()
+        
+        # Info file
+        info = f"""Minikube Cluster Information
 ===========================
-
-Cluster Name: ${cluster_name}
-Environment: ${environment}
-Setup Date: $(date)
+Cluster Name: {self.cluster_name}
+Environment: {self.environment}
+Setup Date: {time.strftime('%Y-%m-%d %H:%M:%S')}
 
 Instance Information:
-- Private IP: $PRIVATE_IP
-- Public IP: $PUBLIC_IP
-- Instance Type: $(curl -s http://169.254.169.254/latest/meta-data/instance-type)
+- Private IP: {private_ip}
+- Public IP: {public_ip}  
+- Instance Type: {instance_type}
 
 Minikube Configuration:
-- Version: ${minikube_version}
-- Kubernetes Version: ${kubernetes_version}
-- Driver: ${minikube_driver}
-- Memory: ${minikube_memory}MB
-- CPUs: ${minikube_cpus}
+- Version: {self.minikube_version}
+- Kubernetes Version: {self.kubernetes_version}
+- Driver: {self.minikube_driver}
+- Memory: {self.minikube_memory}MB
+- CPUs: {self.minikube_cpus}
 
 Access Information:
-- SSH: ssh -i ${cluster_name}-key.pem ubuntu@$PUBLIC_IP
-- Kubernetes API: https://$PRIVATE_IP:8443
+- SSH: ssh -i {self.cluster_name}-key.pem ubuntu@{public_ip}
+- Kubernetes API: https://{private_ip}:8443
 
-Setup completed at: $(date)
-INFOEOF
-
-chown ubuntu:ubuntu /home/ubuntu/cluster-info.txt
-
-# Create utility scripts
-cat <<'DASHEOF' > /home/ubuntu/start-dashboard.sh
-#!/bin/bash
-echo "Starting Kubernetes Dashboard..."
-minikube dashboard --url
-DASHEOF
-
-cat <<'HEALTHEOF' > /home/ubuntu/cluster-health-check.sh
-#!/bin/bash
-echo "=== Minikube Cluster Health Check ==="
+Setup completed at: {time.strftime('%Y-%m-%d %H:%M:%S')}
+"""
+        with open(f"{self.ubuntu_home}/cluster-info.txt", 'w') as f: f.write(info)
+        
+        # Scripts
+        scripts = {
+            f"{self.ubuntu_home}/start-dashboard.sh": "#!/bin/bash\necho 'Starting Dashboard...'\nminikube dashboard --url\n",
+            f"{self.ubuntu_home}/cluster-health-check.sh": """#!/bin/bash
+echo "=== Health Check ==="
 echo "Date: $(date)"
-echo ""
 echo "Minikube Status:"
 minikube status
-echo ""
-echo "Node Status:"
+echo "Nodes:"
 kubectl get nodes
-echo ""
 echo "System Pods:"
 kubectl get pods -n kube-system
-echo ""
-echo "All Namespaces:"
-kubectl get all --all-namespaces
-HEALTHEOF
+"""
+        }
+        
+        for script_path, content in scripts.items():
+            with open(script_path, 'w') as f: f.write(content)
+            self.run_cmd(f"chmod +x {script_path}")
+        
+        self.run_cmd(f"chown ubuntu:ubuntu {self.ubuntu_home}/cluster-info.txt")
+        for script_path in scripts: self.run_cmd(f"chown ubuntu:ubuntu {script_path}")
 
-chmod +x /home/ubuntu/start-dashboard.sh
-chmod +x /home/ubuntu/cluster-health-check.sh
-chown ubuntu:ubuntu /home/ubuntu/start-dashboard.sh
-chown ubuntu:ubuntu /home/ubuntu/cluster-health-check.sh
-
-# Create systemd service
-cat <<SERVICEEOF > /etc/systemd/system/minikube.service
-[Unit]
+    def create_service(self):
+        service = f"""[Unit]
 Description=Minikube Kubernetes Cluster
 After=docker.service
 Requires=docker.service
@@ -353,37 +253,73 @@ Requires=docker.service
 Type=oneshot
 User=ubuntu
 Group=ubuntu
-ExecStart=/usr/local/bin/minikube start --driver=${minikube_driver}
+ExecStart=/usr/local/bin/minikube start --driver={self.minikube_driver}
 RemainAfterExit=yes
-Environment=HOME=/home/ubuntu
-Environment=MINIKUBE_HOME=/home/ubuntu/.minikube
+Environment=HOME={self.ubuntu_home}
+Environment=MINIKUBE_HOME={self.minikube_home}
 
 [Install]
-WantedBy=multi-user.target
-SERVICEEOF
+WantedBy=multi-user.target"""
+        with open('/etc/systemd/system/minikube.service', 'w') as f: f.write(service)
+        self.run_cmd("systemctl enable minikube.service")
 
-systemctl enable minikube.service
+    def run(self):
+        try:
+            logger.info("=" * 50)
+            logger.info("Starting Minikube setup")
+            logger.info("=" * 50)
+            
+            self.get_metadata()
+            self.update_system()
+            self.install_docker()
+            self.install_k8s_tools()
+            self.configure_system()
+            self.start_minikube()
+            self.enable_addons()
+            self.create_rbac()
+            self.create_files()
+            self.create_service()
+            
+            # Final verification
+            self.run_cmd("minikube status", user="ubuntu")
+            self.run_cmd("kubectl get nodes", user="ubuntu")
+            self.run_cmd("kubectl get pods -n kube-system", user="ubuntu")
+            
+            # Success marker
+            with open('/tmp/minikube-ready', 'w') as f: f.write('SUCCESS: Minikube cluster is ready\n')
+            self.run_cmd('chown ubuntu:ubuntu /tmp/minikube-ready')
+            
+            logger.info("✅ Minikube setup completed successfully!")
+            logger.info("🎉 Cluster is ready!")
+            
+        except Exception as e:
+            logger.error(f"Setup failed: {e}")
+            raise
+        finally:
+            # Cleanup
+            for f in ['/tmp/jenkins-rbac.yaml']: 
+                if os.path.exists(f): os.remove(f)
 
-# Final health check
-echo "Performing final health check..."
-sudo -i -u ubuntu bash -c '
-export MINIKUBE_HOME=/home/ubuntu/.minikube
-export KUBECONFIG=/home/ubuntu/.kube/config
+if __name__ == "__main__": MinikubeSetup().run()
+EOF
 
-echo "Final cluster status:"
-minikube status
-kubectl get nodes
-kubectl get pods -n kube-system
-'
+# Make the Python script executable
+chmod +x /tmp/minikube_setup.py
 
-# Create success marker
-echo "SUCCESS: Minikube cluster is ready" > /tmp/minikube-ready
-chown ubuntu:ubuntu /tmp/minikube-ready
+# Run the Python script with Terraform variables as arguments
+echo "Executing Python setup script..."
+python3 /tmp/minikube_setup.py \
+    "${cluster_name}" \
+    "${environment}" \
+    "${minikube_version}" \
+    "${kubernetes_version}" \
+    "${minikube_driver}" \
+    "${minikube_memory}" \
+    "${minikube_cpus}"
 
-echo "✅ Minikube cluster setup completed successfully at $(date)"
-echo "🎉 Cluster is ready for deployments!"
+echo "Python-based setup completed!"
 
-# Cleanup temporary files
-rm -f /tmp/start-minikube.sh /tmp/minikube-memory /tmp/minikube-cpus /tmp/minikube-driver /tmp/minikube-k8s-version
+# Cleanup
+rm -f /tmp/minikube_setup.py
 
 echo "Setup script completed successfully!"
